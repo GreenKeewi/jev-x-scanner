@@ -9,8 +9,6 @@
 
 /** @typedef {"breaking" | "golden_nugget" | "ai_slop"} Label */
 
-/** @typedef {"viewport" | "on_add"} ThrottleMode */
-
 /**
  * @typedef {{ views: number, likes: number, replies: number, reposts: number }} Engagement
  */
@@ -31,12 +29,12 @@ export const LABELS = /** @type {const} */ (["breaking", "golden_nugget", "ai_sl
 export const STORAGE_KEYS = {
   API_KEY: "typesafeApiKey",
   ENABLED: "extensionEnabled",
-  THROTTLE_MODE: "throttleMode",
   PREFERENCE: "userPreference",
   POST_RECORDS: "postRecords",
   CRITERIA: "labelCriteria", // { breaking, golden_nugget, ai_slop } override text
   SESSION_LIMIT: "sessionLimit", // max posts classified per tab session
   AUTO_RELOAD: "autoReloadOnLimit",
+  SCAN_REPLIES: "scanReplies", // whether reply posts get classified
 };
 
 /** Default classification criteria sent to Jev per label. User-editable overrides
@@ -49,11 +47,11 @@ export const DEFAULT_CRITERIA = {
 
 export const DEFAULT_SETTINGS = {
   [STORAGE_KEYS.ENABLED]: true,
-  [STORAGE_KEYS.THROTTLE_MODE]: "viewport",
   [STORAGE_KEYS.PREFERENCE]: "",
   [STORAGE_KEYS.CRITERIA]: DEFAULT_CRITERIA,
   [STORAGE_KEYS.SESSION_LIMIT]: 200,
   [STORAGE_KEYS.AUTO_RELOAD]: false,
+  [STORAGE_KEYS.SCAN_REPLIES]: true,
 };
 
 /** Max number of PostRecord entries kept in STORAGE_KEYS.POST_RECORDS. */

@@ -148,7 +148,7 @@ button.jev-badge:focus-visible {
 }
 
 .jev-counter-key-btn,
-.jev-counter-stop-btn {
+.jev-counter-settings-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -172,43 +172,14 @@ button.jev-badge:focus-visible {
 }
 
 .jev-counter-key-btn:hover,
-.jev-counter-stop-btn:hover {
+.jev-counter-settings-btn:hover {
   background: rgba(0, 0, 0, 0.06);
 }
 
 .jev-counter-key-btn:focus-visible,
-.jev-counter-stop-btn:focus-visible {
+.jev-counter-settings-btn:focus-visible {
   outline: 2px solid #1d9bf0;
   outline-offset: 2px;
-}
-
-/* Session progress bar: fills toward the session classification limit,
-   pulses while a request is in flight. */
-
-.jev-progress-wrap {
-  position: relative;
-  height: 4px;
-  margin: 2px 8px 4px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.1);
-  overflow: hidden;
-}
-
-.jev-progress-fill {
-  height: 100%;
-  width: 0%;
-  border-radius: 999px;
-  background: #1d9bf0;
-  transition: width 0.25s ease;
-}
-
-.jev-progress-active .jev-progress-fill {
-  animation: jev-progress-pulse 1.1s ease-in-out infinite;
-}
-
-@keyframes jev-progress-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
 }
 
 .jev-limit-banner {
@@ -248,12 +219,8 @@ button.jev-badge:focus-visible {
 
   .jev-counter-counts:hover,
   .jev-counter-key-btn:hover,
-  .jev-counter-stop-btn:hover {
+  .jev-counter-settings-btn:hover {
     background: rgba(255, 255, 255, 0.12);
-  }
-
-  .jev-progress-wrap {
-    background: rgba(255, 255, 255, 0.15);
   }
 
   .jev-limit-banner {

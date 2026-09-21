@@ -44,25 +44,21 @@
     </section>
 
     <section class="card">
-      <span class="field-label">Throttle mode</span>
-      <p class="hint">Controls when posts get sent off for classification.</p>
-      <div class="radio-group">
-        <label class="radio-row">
-          <input type="radio" name="throttle-mode" value="viewport" id="throttle-viewport" />
-          Classify only visible posts (recommended)
-        </label>
-        <label class="radio-row">
-          <input type="radio" name="throttle-mode" value="on_add" id="throttle-on-add" />
-          Classify posts as soon as they load (DOM-based)
-        </label>
-      </div>
+      <label class="switch-row" for="scan-replies-toggle">
+        <span class="field-label">Scan replies</span>
+        <input type="checkbox" id="scan-replies-toggle" />
+        <span class="switch"></span>
+      </label>
+      <p class="hint">
+        When off, reply posts ("Replying to @user") are skipped and never classified.
+      </p>
     </section>
 
     <section class="card">
       <label class="field-label" for="session-limit">Max posts classified per page session</label>
       <p class="hint">
         Once this many posts are classified on a tab, scanning stops until you
-        reload the page. Applies to both throttle modes.
+        reload the page.
       </p>
       <input type="number" id="session-limit" min="1" step="1" />
       <label class="switch-row" for="auto-reload-toggle" style="margin-top: 12px;">

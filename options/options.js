@@ -5,8 +5,7 @@ const toggleVisibilityBtn = document.getElementById("toggle-visibility");
 const saveKeyBtn = document.getElementById("save-key");
 const keyStatus = document.getElementById("key-status");
 const enabledToggle = document.getElementById("enabled-toggle");
-const throttleViewport = document.getElementById("throttle-viewport");
-const throttleOnAdd = document.getElementById("throttle-on-add");
+const scanRepliesToggle = document.getElementById("scan-replies-toggle");
 const preferenceInput = document.getElementById("preference");
 const preferenceStatus = document.getElementById("preference-status");
 const sessionLimitInput = document.getElementById("session-limit");
@@ -29,11 +28,6 @@ function showStatus(message, isError = false) {
   }, 2500);
 }
 
-function setThrottleRadio(mode) {
-  throttleViewport.checked = mode === "viewport";
-  throttleOnAdd.checked = mode === "on_add";
-}
-
 function setCriteriaInputs(criteria) {
   criteriaBreakingInput.value = criteria.breaking ?? DEFAULT_CRITERIA.breaking;
   criteriaGoldenInput.value = criteria.golden_nugget ?? DEFAULT_CRITERIA.golden_nugget;
@@ -44,7 +38,7 @@ async function loadSettings() {
   const stored = await chrome.storage.local.get([
     STORAGE_KEYS.API_KEY,
     STORAGE_KEYS.ENABLED,
-    STORAGE_KEYS.THROTTLE_MODE,
+    STORAGE_KEYS.SCAN_REPLIES,
     STORAGE_KEYS.PREFERENCE,
     STORAGE_KEYS.CRITERIA,
     STORAGE_KEYS.SESSION_LIMIT,
@@ -54,9 +48,8 @@ async function loadSettings() {
   apiKeyInput.value = stored[STORAGE_KEYS.API_KEY] ?? "";
   enabledToggle.checked =
     stored[STORAGE_KEYS.ENABLED] ?? DEFAULT_SETTINGS[STORAGE_KEYS.ENABLED];
-  setThrottleRadio(
-    stored[STORAGE_KEYS.THROTTLE_MODE] ?? DEFAULT_SETTINGS[STORAGE_KEYS.THROTTLE_MODE]
-  );
+  scanRepliesToggle.checked =
+    stored[STORAGE_KEYS.SCAN_REPLIES] ?? DEFAULT_SETTINGS[STORAGE_KEYS.SCAN_REPLIES];
   preferenceInput.value =
     stored[STORAGE_KEYS.PREFERENCE] ?? DEFAULT_SETTINGS[STORAGE_KEYS.PREFERENCE];
   setCriteriaInputs(stored[STORAGE_KEYS.CRITERIA] ?? DEFAULT_CRITERIA);
@@ -88,12 +81,9 @@ enabledToggle.addEventListener("change", async () => {
   });
 });
 
-[throttleViewport, throttleOnAdd].forEach((radio) => {
-  radio.addEventListener("change", async () => {
-    if (!radio.checked) return;
-    await chrome.storage.local.set({
-      [STORAGE_KEYS.THROTTLE_MODE]: radio.value,
-    });
+scanRepliesToggle.addEventListener("change", async () => {
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.SCAN_REPLIES]: scanRepliesToggle.checked,
   });
 });
 

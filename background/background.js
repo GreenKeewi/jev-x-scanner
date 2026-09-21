@@ -159,6 +159,9 @@ async function callJevOnce(apiKey, text, engagement, baseCriteria, preference) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
+  const criteria = buildChoiceCriteria(baseCriteria, preference);
+  console.debug("[Jev X Scanner] criteria", criteria);
+
   try {
     const response = await fetch(TYPESAFE_ENDPOINT, {
       method: "POST",
@@ -173,7 +176,7 @@ async function callJevOnce(apiKey, text, engagement, baseCriteria, preference) {
           label: {
             type: "choice",
             instructions: CLASSIFY_INSTRUCTIONS,
-            criteria: buildChoiceCriteria(baseCriteria, preference),
+            criteria,
           },
         },
       }),
@@ -184,15 +187,25 @@ async function callJevOnce(apiKey, text, engagement, baseCriteria, preference) {
       throw new Error(`TypeSafe API responded with status ${response.status}`);
     }
 
-    /** @type {{ answers?: { label?: { choice?: string } } }} */
+    /** @type {{ answers?: { label?: { choice?: string, probabilities?: Record<string, number>, confidence?: number } } }} */
     const data = await response.json();
     const choice = data?.answers?.label?.choice;
+
+    console.debug("[Jev X Scanner] classify result", {
+      text: text?.slice?.(0, 80),
+      choice: data?.answers?.label?.choice,
+      probabilities: data?.answers?.label?.probabilities,
+      confidence: data?.answers?.label?.confidence,
+    });
 
     if (!choice || !LABELS.includes(/** @type {Label} */ (choice))) {
       throw new Error(`Unexpected/missing choice in TypeSafe response: ${JSON.stringify(data)}`);
     }
 
     return /** @type {Label} */ (choice);
+  } catch (error) {
+    console.warn("[Jev X Scanner] classify error", error);
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
