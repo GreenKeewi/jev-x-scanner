@@ -1,7 +1,7 @@
 # Jev X Scanner
 
 A personal-use Chrome extension that classifies X/Twitter posts in real time
-as you scroll: **Breaking**, **Golden Nugget**, or **AI Slop** — powered by
+as you scroll: **Breaking**, **Golden Nugget**, or **Slop** — powered by
 the [Jev API](https://docs.typesafe.ai).
 
 See the full design at
@@ -30,8 +30,8 @@ See the full design at
 
 ## Dashboard
 
-A small floating counter (bottom-right of the X feed) shows live
-Breaking/Golden Nugget/AI Slop counts. Click it, or click the extension's
+A small floating counter (bottom-left of the X feed) shows live
+Breaking/Golden Nugget/Slop counts. Click it, or click the extension's
 toolbar icon, to open the dashboard — a full-page table of every classified
 post with its link, engagement, and timestamp, filterable/sortable, with
 Golden Nugget posts highlighted as good to reply to.

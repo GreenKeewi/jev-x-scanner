@@ -93,7 +93,7 @@ function renderSummary(records) {
     `${records.length} post${records.length === 1 ? "" : "s"} classified — ` +
     `${LABEL_META.breaking.icon} ${counts.breaking} Breaking · ` +
     `${LABEL_META.golden_nugget.icon} ${counts.golden_nugget} Golden Nugget · ` +
-    `${LABEL_META.ai_slop.icon} ${counts.ai_slop} AI Slop`;
+    `${LABEL_META.ai_slop.icon} ${counts.ai_slop} Slop`;
 }
 
 function getVisibleRecords() {

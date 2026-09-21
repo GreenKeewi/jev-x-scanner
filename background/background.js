@@ -314,6 +314,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === MESSAGE_TYPES.OPEN_OPTIONS) {
+    // chrome.runtime.openOptionsPage() is only reliably callable from an
+    // extension context (background/options/dashboard), not from a content
+    // script — route the request through here instead.
+    chrome.runtime.openOptionsPage();
+    return false;
+  }
+
   return false;
 });
 

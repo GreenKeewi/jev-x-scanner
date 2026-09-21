@@ -61,6 +61,7 @@ export const MAX_POST_RECORDS = 500;
 export const MESSAGE_TYPES = {
   CLASSIFY_POST: "CLASSIFY_POST", // content -> background: { tweetId, url, text, engagement }
   OPEN_DASHBOARD: "OPEN_DASHBOARD", // content -> background: { type: "OPEN_DASHBOARD" }
+  OPEN_OPTIONS: "OPEN_OPTIONS", // content -> background: { type: "OPEN_OPTIONS" }
 };
 
 /**
@@ -83,7 +84,7 @@ export const MESSAGE_TYPES = {
 export const LABEL_META = {
   breaking: { icon: "⚡", text: "Breaking", className: "jev-badge-breaking" },
   golden_nugget: { icon: "🪙", text: "Golden Nugget", className: "jev-badge-golden" },
-  ai_slop: { icon: "🤖", text: "AI Slop", className: "jev-badge-slop" },
+  ai_slop: { icon: "🤖", text: "Slop", className: "jev-badge-slop" },
 };
 
 /** Path to the dashboard page, relative to the extension root. */

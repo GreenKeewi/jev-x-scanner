@@ -32,12 +32,13 @@ const DEFAULT_SETTINGS = {
 const MESSAGE_TYPES = {
   CLASSIFY_POST: "CLASSIFY_POST",
   OPEN_DASHBOARD: "OPEN_DASHBOARD",
+  OPEN_OPTIONS: "OPEN_OPTIONS",
 };
 
 const LABEL_META = {
   breaking: { icon: "⚡", text: "Breaking", className: "jev-badge-breaking" },
   golden_nugget: { icon: "🪙", text: "Golden Nugget", className: "jev-badge-golden" },
-  ai_slop: { icon: "🤖", text: "AI Slop", className: "jev-badge-slop" },
+  ai_slop: { icon: "🤖", text: "Slop", className: "jev-badge-slop" },
 };
 
 (function () {
@@ -492,7 +493,7 @@ const LABEL_META = {
     badge.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      chrome.runtime.openOptionsPage();
+      openApiKeyModal();
     });
 
     article.appendChild(badge);
@@ -587,7 +588,7 @@ const LABEL_META = {
     settingsButtonEl.textContent = "⚙️";
     settingsButtonEl.addEventListener("click", (event) => {
       event.stopPropagation();
-      chrome.runtime.openOptionsPage();
+      chrome.runtime.sendMessage({ type: MESSAGE_TYPES.OPEN_OPTIONS });
     });
 
     const keyButtonEl = document.createElement("button");
