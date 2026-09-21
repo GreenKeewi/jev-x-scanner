@@ -347,14 +347,14 @@ const LABEL_META = {
 
   // ---- Floating counter widget -------------------------------------------
   //
-  // Injected once per page load. Counts reflect ALL persisted PostRecords in
-  // chrome.storage.local[STORAGE_KEYS.POST_RECORDS] (not just this page's
-  // session), refreshed on load and kept live via chrome.storage.onChanged.
-  // Clicking it asks the background worker to open the dashboard via
-  // { type: MESSAGE_TYPES.OPEN_DASHBOARD } — the background worker is
-  // expected to open/focus a tab at chrome.runtime.getURL(DASHBOARD_PATH).
+  // Injected once per page load, fixed bottom-left. Two parts: a counts
+  // pill (click opens the dashboard) and a key button (click opens an
+  // in-page modal to add/edit the Jev API key). Counts reflect ALL
+  // persisted PostRecords in chrome.storage.local[STORAGE_KEYS.POST_RECORDS]
+  // (not just this page's session), refreshed on load and kept live via
+  // chrome.storage.onChanged.
 
-  let counterWidgetEl = null;
+  let countsButtonEl = null;
 
   function countLabels(records) {
     const counts = { breaking: 0, golden_nugget: 0, ai_slop: 0 };
@@ -369,8 +369,8 @@ const LABEL_META = {
   }
 
   function renderCounterWidget(counts) {
-    if (!counterWidgetEl) return;
-    counterWidgetEl.textContent =
+    if (!countsButtonEl) return;
+    countsButtonEl.textContent =
       `⚡ ${counts.breaking} · 🪙 ${counts.golden_nugget} · 🤖 ${counts.ai_slop}`;
   }
 
@@ -384,16 +384,31 @@ const LABEL_META = {
   function injectCounterWidget() {
     if (document.querySelector(".jev-counter-widget")) return;
 
-    counterWidgetEl = document.createElement("button");
-    counterWidgetEl.type = "button";
-    counterWidgetEl.className = "jev-counter-widget";
-    counterWidgetEl.title = "Open Jev X Scanner dashboard";
-    counterWidgetEl.textContent = "⚡ 0 · 🪙 0 · 🤖 0";
-    counterWidgetEl.addEventListener("click", () => {
+    const widget = document.createElement("div");
+    widget.className = "jev-counter-widget";
+
+    countsButtonEl = document.createElement("button");
+    countsButtonEl.type = "button";
+    countsButtonEl.className = "jev-counter-counts";
+    countsButtonEl.title = "Open Jev X Scanner dashboard";
+    countsButtonEl.textContent = "⚡ 0 · 🪙 0 · 🤖 0";
+    countsButtonEl.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: MESSAGE_TYPES.OPEN_DASHBOARD });
     });
 
-    document.body.appendChild(counterWidgetEl);
+    const keyButtonEl = document.createElement("button");
+    keyButtonEl.type = "button";
+    keyButtonEl.className = "jev-counter-key-btn";
+    keyButtonEl.title = "Add/edit Jev API key";
+    keyButtonEl.textContent = "🔑";
+    keyButtonEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openApiKeyModal();
+    });
+
+    widget.appendChild(countsButtonEl);
+    widget.appendChild(keyButtonEl);
+    document.body.appendChild(widget);
     refreshCounterWidget();
   }
 
@@ -403,6 +418,74 @@ const LABEL_META = {
       renderCounterWidget(countLabels(changes[STORAGE_KEYS.POST_RECORDS].newValue));
     }
   });
+
+  // ---- API key modal ------------------------------------------------------
+
+  function closeApiKeyModal(overlay) {
+    overlay.remove();
+    document.removeEventListener("keydown", handleModalKeydown);
+  }
+
+  function handleModalKeydown(event) {
+    if (event.key === "Escape") {
+      const overlay = document.querySelector(".jev-modal-overlay");
+      if (overlay) closeApiKeyModal(overlay);
+    }
+  }
+
+  function openApiKeyModal() {
+    if (document.querySelector(".jev-modal-overlay")) return;
+
+    const overlay = document.createElement("div");
+    overlay.className = "jev-modal-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "jev-modal";
+
+    modal.innerHTML = `
+      <h2>Jev API key</h2>
+      <p>Stored locally in this browser and used to classify posts.</p>
+      <input type="password" id="jev-modal-key-input" autocomplete="off" spellcheck="false" placeholder="Paste your TypeSafe API key" />
+      <p class="jev-modal-status" id="jev-modal-status"></p>
+      <div class="jev-modal-actions">
+        <button type="button" class="jev-modal-cancel">Cancel</button>
+        <button type="button" class="jev-modal-save">Save</button>
+      </div>
+    `;
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const input = modal.querySelector("#jev-modal-key-input");
+    const status = modal.querySelector("#jev-modal-status");
+    const cancelBtn = modal.querySelector(".jev-modal-cancel");
+    const saveBtn = modal.querySelector(".jev-modal-save");
+
+    chrome.storage.local.get([STORAGE_KEYS.API_KEY], (result) => {
+      if (chrome.runtime.lastError) return;
+      input.value = result[STORAGE_KEYS.API_KEY] || "";
+      input.focus();
+    });
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) closeApiKeyModal(overlay);
+    });
+    cancelBtn.addEventListener("click", () => closeApiKeyModal(overlay));
+
+    saveBtn.addEventListener("click", () => {
+      const value = input.value.trim();
+      chrome.storage.local.set({ [STORAGE_KEYS.API_KEY]: value }, () => {
+        if (chrome.runtime.lastError) {
+          status.textContent = "Failed to save.";
+          return;
+        }
+        status.textContent = "Saved.";
+        setTimeout(() => closeApiKeyModal(overlay), 600);
+      });
+    });
+
+    document.addEventListener("keydown", handleModalKeydown);
+  }
 
   // ---- Init -----------------------------------------------------------
 
