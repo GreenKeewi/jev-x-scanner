@@ -7,6 +7,8 @@ const keyStatus = document.getElementById("key-status");
 const enabledToggle = document.getElementById("enabled-toggle");
 const throttleViewport = document.getElementById("throttle-viewport");
 const throttleOnAdd = document.getElementById("throttle-on-add");
+const preferenceInput = document.getElementById("preference");
+const preferenceStatus = document.getElementById("preference-status");
 
 let statusTimer = null;
 
@@ -29,6 +31,7 @@ async function loadSettings() {
     STORAGE_KEYS.API_KEY,
     STORAGE_KEYS.ENABLED,
     STORAGE_KEYS.THROTTLE_MODE,
+    STORAGE_KEYS.PREFERENCE,
   ]);
 
   apiKeyInput.value = stored[STORAGE_KEYS.API_KEY] ?? "";
@@ -37,6 +40,8 @@ async function loadSettings() {
   setThrottleRadio(
     stored[STORAGE_KEYS.THROTTLE_MODE] ?? DEFAULT_SETTINGS[STORAGE_KEYS.THROTTLE_MODE]
   );
+  preferenceInput.value =
+    stored[STORAGE_KEYS.PREFERENCE] ?? DEFAULT_SETTINGS[STORAGE_KEYS.PREFERENCE];
 }
 
 toggleVisibilityBtn.addEventListener("click", () => {
@@ -68,6 +73,21 @@ enabledToggle.addEventListener("change", async () => {
       [STORAGE_KEYS.THROTTLE_MODE]: radio.value,
     });
   });
+});
+
+let preferenceSaveTimer = null;
+preferenceInput.addEventListener("input", () => {
+  if (preferenceSaveTimer) clearTimeout(preferenceSaveTimer);
+  preferenceSaveTimer = setTimeout(async () => {
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.PREFERENCE]: preferenceInput.value.trim(),
+    });
+    preferenceStatus.textContent = "Saved.";
+    preferenceStatus.classList.remove("error");
+    setTimeout(() => {
+      preferenceStatus.textContent = "";
+    }, 1500);
+  }, 500);
 });
 
 loadSettings();

@@ -100,6 +100,72 @@ This is DOM/extension-heavy with little pure-logic surface. Approach:
 ## Out of Scope
 
 - No backend/server component.
-- No persistent cross-session cache (in-memory only, per spec decision).
 - No support for browsers other than Chrome (Manifest V3).
 - No analytics/telemetry.
+
+## Addendum (2026-09-21): UI, Dashboard, Personalization
+
+The original spec omitted any visible UI beyond the per-post badge, and
+used an in-memory-only cache. This addendum adds:
+
+### Persisted post storage
+
+Move from in-memory-only cache to `chrome.storage.local`. Store a capped
+list (most recent 500) of classified post records:
+
+```ts
+type PostRecord = {
+  tweetId: string;
+  url: string;           // https://x.com/<user>/status/<id>
+  text: string;
+  label: Label;
+  timestamp: number;      // Date.now() at classification time
+  engagement: { views: number, likes: number, replies: number, reposts: number };
+};
+```
+
+The in-memory `Map` cache in the background worker remains as a fast
+lookup layer per session; it's now backed by this persisted store so the
+dashboard has data across sessions and the badge cache survives service
+worker restarts (hydrate the Map from storage on worker startup).
+
+### Engagement-aware, personalized classification
+
+- Content script scrapes visible engagement counts (views/likes/replies/
+  reposts) from each post's DOM alongside the text. Missing/unparsable
+  counts default to 0 and don't block classification.
+- A new options field, "What are you looking for?" (free text, stored as
+  `STORAGE_KEYS.PREFERENCE`), is sent with every classification request.
+- The background worker includes both engagement numbers and the
+  preference text in the Jev `state`, and updates the Golden Nugget
+  `criteria` description to bias toward the user's stated interest when
+  a preference is set (e.g. append "The user is specifically interested
+  in: <preference>" to the golden_nugget criteria text).
+
+### Floating counter widget
+
+Content script injects a small fixed-position widget, bottom-right of the
+viewport, showing live counts for all three labels (⚡ N · 🪙 N · 🤖 N),
+reading from `chrome.storage.local` and updating via `chrome.storage.onChanged`.
+Clicking it opens the dashboard (see below).
+
+### Toolbar icon behavior
+
+`manifest.json` gets an `action` entry with no popup. `chrome.action.onClicked`
+opens the dashboard page as a new tab, or focuses/reuses an already-open
+dashboard tab.
+
+### Dashboard
+
+A new extension page, `dashboard/dashboard.html`, opened via `chrome.tabs.create`
+(never as a popup). Reads `PostRecord[]` from storage and renders:
+
+- A table: link (opens the post in a new tab), text snippet, label (with
+  color), engagement counts, relative timestamp.
+- Filter by label (All / Breaking / Golden Nugget / AI Slop).
+- Golden Nugget rows visually highlighted as "good to reply to."
+- Sort by timestamp (default, newest first) or by engagement.
+
+No new permissions beyond what's already declared are needed since this
+reads local storage and opens tabs the user already has host permission
+context for.

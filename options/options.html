@@ -34,6 +34,16 @@
     </section>
 
     <section class="card">
+      <label class="field-label" for="preference">What are you looking for?</label>
+      <p class="hint">
+        Describe the kind of content you want more of. Jev will use this to
+        judge "Golden Nugget" specifically against your interests.
+      </p>
+      <textarea id="preference" rows="3" placeholder="e.g. AI research, startup lessons, indie hacking build logs..."></textarea>
+      <p id="preference-status" class="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card">
       <span class="field-label">Throttle mode</span>
       <p class="hint">Controls when posts get sent off for classification.</p>
       <div class="radio-group">

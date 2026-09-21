@@ -9,9 +9,17 @@
 // replicating what `client.systemOne({ state, questions: { label: choice(...) } })`
 // does under the hood. See REST shape notes at the bottom of this file.
 
-import { STORAGE_KEYS, MESSAGE_TYPES, LABELS } from "../shared/contract.js";
+import {
+  STORAGE_KEYS,
+  MESSAGE_TYPES,
+  LABELS,
+  MAX_POST_RECORDS,
+  DASHBOARD_PATH,
+} from "../shared/contract.js";
 
 /** @typedef {import("../shared/contract.js").Label} Label */
+/** @typedef {import("../shared/contract.js").Engagement} Engagement */
+/** @typedef {import("../shared/contract.js").PostRecord} PostRecord */
 
 const TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const TYPESAFE_MODEL = "jev-latest";
@@ -21,14 +29,40 @@ const CLASSIFY_INSTRUCTIONS =
   "Classify this X/Twitter post as Breaking, Golden Nugget, or AI Slop.";
 
 /** @type {Record<Label, string>} */
-const CHOICE_CRITERIA = {
+const BASE_CHOICE_CRITERIA = {
   breaking: "Breaking news, urgent or time-sensitive, important developing information.",
   golden_nugget: "Valuable, insightful, high-quality content worth reading closely.",
   ai_slop: "Low-quality, generic, or likely AI-generated filler content.",
 };
 
-/** In-memory cache: tweetId -> Label. Cleared on service worker restart. */
+/** In-memory cache: tweetId -> Label. Hydrated from storage on worker startup. */
 const classificationCache = new Map();
+
+/**
+ * Hydrates the in-memory classification cache from the persisted
+ * PostRecord array in chrome.storage.local. Runs once at module load
+ * (service worker startup).
+ * @returns {Promise<void>}
+ */
+async function hydrateCacheFromStorage() {
+  try {
+    const result = await chrome.storage.local.get(STORAGE_KEYS.POST_RECORDS);
+    /** @type {PostRecord[]} */
+    const records = Array.isArray(result[STORAGE_KEYS.POST_RECORDS])
+      ? result[STORAGE_KEYS.POST_RECORDS]
+      : [];
+    for (const record of records) {
+      if (record && typeof record.tweetId === "string" && LABELS.includes(record.label)) {
+        classificationCache.set(record.tweetId, record.label);
+      }
+    }
+  } catch (error) {
+    // Non-fatal: worst case, cache starts empty and re-hydrates via
+    // classifications as the user scrolls.
+  }
+}
+
+const hydrationPromise = hydrateCacheFromStorage();
 
 /**
  * Reads the TypeSafe/Jev API key from chrome.storage.local.
@@ -41,13 +75,71 @@ async function getApiKey() {
 }
 
 /**
+ * Reads the user's stated preference text from chrome.storage.local.
+ * Empty/missing is treated as "no preference set".
+ * @returns {Promise<string>}
+ */
+async function getPreference() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.PREFERENCE);
+  const preference = result[STORAGE_KEYS.PREFERENCE];
+  return typeof preference === "string" ? preference.trim() : "";
+}
+
+/**
+ * Builds the golden_nugget criteria description, appending the user's
+ * stated preference when one is set.
+ * @param {string} preference
+ * @returns {Record<Label, string>}
+ */
+function buildChoiceCriteria(preference) {
+  if (!preference) {
+    return BASE_CHOICE_CRITERIA;
+  }
+  return {
+    ...BASE_CHOICE_CRITERIA,
+    golden_nugget: `${BASE_CHOICE_CRITERIA.golden_nugget} The user is specifically interested in: "${preference}".`,
+  };
+}
+
+/**
+ * Reads the persisted PostRecord array, removes any existing record with
+ * the same tweetId, appends the new record, and caps the array to the
+ * most recent MAX_POST_RECORDS entries (dropping oldest).
+ * @param {PostRecord} record
+ * @returns {Promise<void>}
+ */
+async function persistPostRecord(record) {
+  try {
+    const result = await chrome.storage.local.get(STORAGE_KEYS.POST_RECORDS);
+    /** @type {PostRecord[]} */
+    const existing = Array.isArray(result[STORAGE_KEYS.POST_RECORDS])
+      ? result[STORAGE_KEYS.POST_RECORDS]
+      : [];
+
+    const deduped = existing.filter((r) => r && r.tweetId !== record.tweetId);
+    deduped.push(record);
+
+    const capped =
+      deduped.length > MAX_POST_RECORDS ? deduped.slice(deduped.length - MAX_POST_RECORDS) : deduped;
+
+    await chrome.storage.local.set({ [STORAGE_KEYS.POST_RECORDS]: capped });
+  } catch (error) {
+    // Non-fatal: classification already succeeded and was returned to the
+    // content script; losing the persisted record just means it won't show
+    // up in the dashboard/counter.
+  }
+}
+
+/**
  * Performs a single fetch to the TypeSafe systemOne REST endpoint with a
  * timeout, and extracts the resulting Label.
  * @param {string} apiKey
  * @param {string} text
+ * @param {Engagement} engagement
+ * @param {string} preference
  * @returns {Promise<Label>}
  */
-async function callJevOnce(apiKey, text) {
+async function callJevOnce(apiKey, text, engagement, preference) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -60,12 +152,12 @@ async function callJevOnce(apiKey, text) {
       },
       body: JSON.stringify({
         model: TYPESAFE_MODEL,
-        state: { post: text },
+        state: { post: text, engagement },
         questions: {
           label: {
             type: "choice",
             instructions: CLASSIFY_INSTRUCTIONS,
-            criteria: CHOICE_CRITERIA,
+            criteria: buildChoiceCriteria(preference),
           },
         },
       }),
@@ -94,23 +186,31 @@ async function callJevOnce(apiKey, text) {
  * Calls the Jev API with one retry on failure.
  * @param {string} apiKey
  * @param {string} text
+ * @param {Engagement} engagement
+ * @param {string} preference
  * @returns {Promise<Label>}
  */
-async function classifyWithRetry(apiKey, text) {
+async function classifyWithRetry(apiKey, text, engagement, preference) {
   try {
-    return await callJevOnce(apiKey, text);
+    return await callJevOnce(apiKey, text, engagement, preference);
   } catch (firstError) {
-    return await callJevOnce(apiKey, text);
+    return await callJevOnce(apiKey, text, engagement, preference);
   }
 }
 
+/** @type {Engagement} */
+const DEFAULT_ENGAGEMENT = { views: 0, likes: 0, replies: 0, reposts: 0 };
+
 /**
  * Handles a single CLASSIFY_POST request end-to-end.
- * @param {{ tweetId: string, text: string }} request
+ * @param {import("../shared/contract.js").ClassifyPostRequest} request
  * @returns {Promise<import("../shared/contract.js").ClassifyPostResponse>}
  */
 async function handleClassifyPost(request) {
-  const { tweetId, text } = request;
+  const { tweetId, url, text, engagement } = request;
+  const safeEngagement = engagement && typeof engagement === "object" ? engagement : DEFAULT_ENGAGEMENT;
+
+  await hydrationPromise;
 
   const cached = classificationCache.get(tweetId);
   if (cached) {
@@ -123,23 +223,70 @@ async function handleClassifyPost(request) {
   }
 
   try {
-    const label = await classifyWithRetry(apiKey, text);
+    const preference = await getPreference();
+    const label = await classifyWithRetry(apiKey, text, safeEngagement, preference);
     classificationCache.set(tweetId, label);
+
+    /** @type {PostRecord} */
+    const record = {
+      tweetId,
+      url,
+      text,
+      label,
+      timestamp: Date.now(),
+      engagement: safeEngagement,
+    };
+    await persistPostRecord(record);
+
     return { ok: true, label };
   } catch (error) {
     return { ok: false, error: "API_ERROR" };
   }
 }
 
+/**
+ * Opens the dashboard page as a new tab, or focuses/reloads-into-view an
+ * already-open dashboard tab rather than spawning duplicates.
+ * @returns {Promise<void>}
+ */
+async function openOrFocusDashboard() {
+  const dashboardUrl = chrome.runtime.getURL(DASHBOARD_PATH);
+  const matches = await chrome.tabs.query({ url: dashboardUrl });
+
+  if (matches.length > 0) {
+    const [existing] = matches;
+    await chrome.tabs.update(existing.id, { active: true });
+    if (existing.windowId !== undefined) {
+      await chrome.windows.update(existing.windowId, { focused: true });
+    }
+    return;
+  }
+
+  await chrome.tabs.create({ url: dashboardUrl });
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || message.type !== MESSAGE_TYPES.CLASSIFY_POST) {
+  if (!message) {
     return false;
   }
 
-  handleClassifyPost(message)
-    .then(sendResponse)
-    .catch(() => sendResponse({ ok: false, error: "API_ERROR" }));
+  if (message.type === MESSAGE_TYPES.CLASSIFY_POST) {
+    handleClassifyPost(message)
+      .then(sendResponse)
+      .catch(() => sendResponse({ ok: false, error: "API_ERROR" }));
 
-  // Keep the message channel open for the async sendResponse above.
-  return true;
+    // Keep the message channel open for the async sendResponse above.
+    return true;
+  }
+
+  if (message.type === MESSAGE_TYPES.OPEN_DASHBOARD) {
+    openOrFocusDashboard();
+    return false;
+  }
+
+  return false;
+});
+
+chrome.action.onClicked.addListener(() => {
+  openOrFocusDashboard();
 });

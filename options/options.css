@@ -164,6 +164,18 @@ h1 {
   transform: translateX(18px);
 }
 
+#preference {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--text);
+  resize: vertical;
+}
+
 .radio-group {
   display: flex;
   flex-direction: column;

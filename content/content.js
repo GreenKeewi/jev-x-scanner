@@ -14,15 +14,19 @@ const STORAGE_KEYS = {
   API_KEY: "typesafeApiKey",
   ENABLED: "extensionEnabled",
   THROTTLE_MODE: "throttleMode",
+  PREFERENCE: "userPreference",
+  POST_RECORDS: "postRecords",
 };
 
 const DEFAULT_SETTINGS = {
   [STORAGE_KEYS.ENABLED]: true,
   [STORAGE_KEYS.THROTTLE_MODE]: "viewport",
+  [STORAGE_KEYS.PREFERENCE]: "",
 };
 
 const MESSAGE_TYPES = {
   CLASSIFY_POST: "CLASSIFY_POST",
+  OPEN_DASHBOARD: "OPEN_DASHBOARD",
 };
 
 const LABEL_META = {
@@ -140,6 +144,83 @@ const LABEL_META = {
     return match ? match[1] : null;
   }
 
+  // ---- Engagement scraping -------------------------------------------------
+  //
+  // Strategy: X renders each action-bar item as a button/link with
+  // data-testid in {"reply", "retweet", "like"}; the visible count text
+  // lives somewhere inside that element (X restructures this markup
+  // periodically, so we grab all text content of the element and pull the
+  // first number-like token out of it rather than assuming a fixed child
+  // structure). Views are the flakiest: modern X renders them as a link to
+  // `/analytics` (or `/status/<id>` with an analytics-shaped aria-label)
+  // containing an `app-text-transition-container` counter; we fall back to
+  // scanning all links/spans for an aria-label matching "<number> views" if
+  // that selector doesn't match. Any count we can't find or parse defaults
+  // to 0 — engagement is a best-effort signal, never a blocker.
+
+  function parseAbbreviatedNumber(raw) {
+    if (!raw) return 0;
+    const cleaned = raw.replace(/,/g, "").trim();
+    const match = cleaned.match(/([\d.]+)\s*([KMB]?)/i);
+    if (!match) return 0;
+    const num = parseFloat(match[1]);
+    if (Number.isNaN(num)) return 0;
+    const suffix = match[2].toUpperCase();
+    const multiplier = suffix === "K" ? 1e3 : suffix === "M" ? 1e6 : suffix === "B" ? 1e9 : 1;
+    return Math.round(num * multiplier);
+  }
+
+  function extractCountByTestId(article, testId) {
+    const el = article.querySelector(`[data-testid="${testId}"]`);
+    if (!el) return 0;
+    // Prefer an explicit aria-label like "12 Replies" / "1.2K reposts" since
+    // it's less likely to pick up unrelated digits; fall back to raw text.
+    const ariaLabel = el.getAttribute("aria-label") || el.closest("[aria-label]")?.getAttribute("aria-label") || "";
+    const text = ariaLabel || el.textContent || "";
+    const match = text.match(/[\d,.]+\s*[KMB]?/i);
+    return match ? parseAbbreviatedNumber(match[0]) : 0;
+  }
+
+  function extractViewCount(article) {
+    // Primary: link to /analytics, which X uses for the view counter.
+    const analyticsLink = article.querySelector('a[href*="/analytics"]');
+    if (analyticsLink) {
+      const container = analyticsLink.querySelector('[data-testid="app-text-transition-container"]');
+      const text = (container ? container.textContent : analyticsLink.textContent) || "";
+      const match = text.match(/[\d,.]+\s*[KMB]?/i);
+      if (match) return parseAbbreviatedNumber(match[0]);
+    }
+    // Fallback: scan for an aria-label like "12,345 views".
+    const candidates = article.querySelectorAll("a[aria-label], span[aria-label]");
+    for (const el of candidates) {
+      const label = el.getAttribute("aria-label") || "";
+      const match = label.match(/([\d,.]+\s*[KMB]?)\s*views?/i);
+      if (match) return parseAbbreviatedNumber(match[1]);
+    }
+    return 0;
+  }
+
+  function extractEngagement(article) {
+    return {
+      views: extractViewCount(article),
+      likes: extractCountByTestId(article, "like"),
+      replies: extractCountByTestId(article, "reply"),
+      reposts: extractCountByTestId(article, "retweet"),
+    };
+  }
+
+  function extractPostUrl(article, tweetId) {
+    // Prefer the actual permalink anchor (has the author handle in it), so
+    // the dashboard link matches the real post URL exactly.
+    const link = article.querySelector('a[href*="/status/"]');
+    if (link) {
+      const href = link.getAttribute("href") || "";
+      if (href.startsWith("http")) return href;
+      if (href.startsWith("/")) return `https://x.com${href.split("?")[0]}`;
+    }
+    return `https://x.com/i/status/${tweetId}`;
+  }
+
   function extractText(article) {
     // Assumption: the post's own text lives in div[data-testid="tweetText"].
     // Quote-tweets can contain a nested tweetText for the quoted post; we
@@ -191,8 +272,11 @@ const LABEL_META = {
     if (requestedTweetIds.has(tweetId)) return;
     requestedTweetIds.add(tweetId);
 
+    const engagement = extractEngagement(article);
+    const url = extractPostUrl(article, tweetId);
+
     chrome.runtime.sendMessage(
-      { type: MESSAGE_TYPES.CLASSIFY_POST, tweetId, text },
+      { type: MESSAGE_TYPES.CLASSIFY_POST, tweetId, url, text, engagement },
       (response) => {
         if (chrome.runtime.lastError) {
           // Extension context gone / background unreachable — omit badge.
@@ -261,7 +345,67 @@ const LABEL_META = {
     article.appendChild(badge);
   }
 
+  // ---- Floating counter widget -------------------------------------------
+  //
+  // Injected once per page load. Counts reflect ALL persisted PostRecords in
+  // chrome.storage.local[STORAGE_KEYS.POST_RECORDS] (not just this page's
+  // session), refreshed on load and kept live via chrome.storage.onChanged.
+  // Clicking it asks the background worker to open the dashboard via
+  // { type: MESSAGE_TYPES.OPEN_DASHBOARD } — the background worker is
+  // expected to open/focus a tab at chrome.runtime.getURL(DASHBOARD_PATH).
+
+  let counterWidgetEl = null;
+
+  function countLabels(records) {
+    const counts = { breaking: 0, golden_nugget: 0, ai_slop: 0 };
+    if (Array.isArray(records)) {
+      for (const record of records) {
+        if (record && Object.prototype.hasOwnProperty.call(counts, record.label)) {
+          counts[record.label] += 1;
+        }
+      }
+    }
+    return counts;
+  }
+
+  function renderCounterWidget(counts) {
+    if (!counterWidgetEl) return;
+    counterWidgetEl.textContent =
+      `⚡ ${counts.breaking} · 🪙 ${counts.golden_nugget} · 🤖 ${counts.ai_slop}`;
+  }
+
+  function refreshCounterWidget() {
+    chrome.storage.local.get([STORAGE_KEYS.POST_RECORDS], (result) => {
+      if (chrome.runtime.lastError) return;
+      renderCounterWidget(countLabels(result[STORAGE_KEYS.POST_RECORDS]));
+    });
+  }
+
+  function injectCounterWidget() {
+    if (document.querySelector(".jev-counter-widget")) return;
+
+    counterWidgetEl = document.createElement("button");
+    counterWidgetEl.type = "button";
+    counterWidgetEl.className = "jev-counter-widget";
+    counterWidgetEl.title = "Open Jev X Scanner dashboard";
+    counterWidgetEl.textContent = "⚡ 0 · 🪙 0 · 🤖 0";
+    counterWidgetEl.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: MESSAGE_TYPES.OPEN_DASHBOARD });
+    });
+
+    document.body.appendChild(counterWidgetEl);
+    refreshCounterWidget();
+  }
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    if (Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.POST_RECORDS)) {
+      renderCounterWidget(countLabels(changes[STORAGE_KEYS.POST_RECORDS].newValue));
+    }
+  });
+
   // ---- Init -----------------------------------------------------------
 
+  injectCounterWidget();
   loadSettingsAndStart();
 })();
