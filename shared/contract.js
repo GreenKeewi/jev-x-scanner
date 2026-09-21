@@ -34,12 +34,26 @@ export const STORAGE_KEYS = {
   THROTTLE_MODE: "throttleMode",
   PREFERENCE: "userPreference",
   POST_RECORDS: "postRecords",
+  CRITERIA: "labelCriteria", // { breaking, golden_nugget, ai_slop } override text
+  SESSION_LIMIT: "sessionLimit", // max posts classified per tab session
+  AUTO_RELOAD: "autoReloadOnLimit",
+};
+
+/** Default classification criteria sent to Jev per label. User-editable overrides
+ * are stored under STORAGE_KEYS.CRITERIA; empty/unset falls back to these. */
+export const DEFAULT_CRITERIA = {
+  breaking: "Breaking news, urgent or time-sensitive, important developing information.",
+  golden_nugget: "Valuable, insightful, high-quality content worth reading closely.",
+  ai_slop: "Low-quality, generic, or likely AI-generated filler content.",
 };
 
 export const DEFAULT_SETTINGS = {
   [STORAGE_KEYS.ENABLED]: true,
   [STORAGE_KEYS.THROTTLE_MODE]: "viewport",
   [STORAGE_KEYS.PREFERENCE]: "",
+  [STORAGE_KEYS.CRITERIA]: DEFAULT_CRITERIA,
+  [STORAGE_KEYS.SESSION_LIMIT]: 200,
+  [STORAGE_KEYS.AUTO_RELOAD]: false,
 };
 
 /** Max number of PostRecord entries kept in STORAGE_KEYS.POST_RECORDS. */

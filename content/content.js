@@ -16,12 +16,17 @@ const STORAGE_KEYS = {
   THROTTLE_MODE: "throttleMode",
   PREFERENCE: "userPreference",
   POST_RECORDS: "postRecords",
+  CRITERIA: "labelCriteria",
+  SESSION_LIMIT: "sessionLimit",
+  AUTO_RELOAD: "autoReloadOnLimit",
 };
 
 const DEFAULT_SETTINGS = {
   [STORAGE_KEYS.ENABLED]: true,
   [STORAGE_KEYS.THROTTLE_MODE]: "viewport",
   [STORAGE_KEYS.PREFERENCE]: "",
+  [STORAGE_KEYS.SESSION_LIMIT]: 200,
+  [STORAGE_KEYS.AUTO_RELOAD]: false,
 };
 
 const MESSAGE_TYPES = {
@@ -42,6 +47,8 @@ const LABEL_META = {
 
   let enabled = DEFAULT_SETTINGS[STORAGE_KEYS.ENABLED];
   let throttleMode = DEFAULT_SETTINGS[STORAGE_KEYS.THROTTLE_MODE];
+  let sessionLimit = DEFAULT_SETTINGS[STORAGE_KEYS.SESSION_LIMIT];
+  let autoReload = DEFAULT_SETTINGS[STORAGE_KEYS.AUTO_RELOAD];
 
   /** tweetIds we've already requested classification for (never re-request). */
   const requestedTweetIds = new Set();
@@ -52,11 +59,22 @@ const LABEL_META = {
   /** Root MutationObserver watching the timeline for new posts. */
   let timelineObserver = null;
 
+  // ---- Session scan state (per tab, resets on reload) --------------------
+
+  /** Number of classification requests sent this page session. */
+  let sessionClassifiedCount = 0;
+  /** Number of classification requests currently in flight. */
+  let inFlightCount = 0;
+  /** true once sessionClassifiedCount has reached sessionLimit. */
+  let limitReached = false;
+  /** true once the user clicks the Stop button; independent of `enabled`. */
+  let manuallyStopped = false;
+
   // ---- Settings load + live updates --------------------------------------
 
   function loadSettingsAndStart() {
     chrome.storage.local.get(
-      [STORAGE_KEYS.ENABLED, STORAGE_KEYS.THROTTLE_MODE],
+      [STORAGE_KEYS.ENABLED, STORAGE_KEYS.THROTTLE_MODE, STORAGE_KEYS.SESSION_LIMIT, STORAGE_KEYS.AUTO_RELOAD],
       (result) => {
         enabled =
           result[STORAGE_KEYS.ENABLED] !== undefined
@@ -64,6 +82,12 @@ const LABEL_META = {
             : DEFAULT_SETTINGS[STORAGE_KEYS.ENABLED];
         throttleMode =
           result[STORAGE_KEYS.THROTTLE_MODE] || DEFAULT_SETTINGS[STORAGE_KEYS.THROTTLE_MODE];
+        sessionLimit =
+          result[STORAGE_KEYS.SESSION_LIMIT] || DEFAULT_SETTINGS[STORAGE_KEYS.SESSION_LIMIT];
+        autoReload =
+          result[STORAGE_KEYS.AUTO_RELOAD] ?? DEFAULT_SETTINGS[STORAGE_KEYS.AUTO_RELOAD];
+
+        updateSessionUi();
 
         if (enabled) {
           startObserving();
@@ -77,7 +101,7 @@ const LABEL_META = {
 
     if (Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.ENABLED)) {
       enabled = changes[STORAGE_KEYS.ENABLED].newValue;
-      if (enabled) {
+      if (enabled && !manuallyStopped && !limitReached) {
         startObserving();
       } else {
         stopObserving();
@@ -88,11 +112,22 @@ const LABEL_META = {
       throttleMode =
         changes[STORAGE_KEYS.THROTTLE_MODE].newValue || DEFAULT_SETTINGS[STORAGE_KEYS.THROTTLE_MODE];
     }
+
+    if (Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.SESSION_LIMIT)) {
+      sessionLimit =
+        changes[STORAGE_KEYS.SESSION_LIMIT].newValue || DEFAULT_SETTINGS[STORAGE_KEYS.SESSION_LIMIT];
+      updateSessionUi();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.AUTO_RELOAD)) {
+      autoReload = changes[STORAGE_KEYS.AUTO_RELOAD].newValue ?? DEFAULT_SETTINGS[STORAGE_KEYS.AUTO_RELOAD];
+    }
   });
 
   // ---- Timeline observation -----------------------------------------------
 
   function startObserving() {
+    if (limitReached || manuallyStopped) return;
     if (timelineObserver) return; // already running
 
     timelineObserver = new MutationObserver((mutations) => {
@@ -232,7 +267,7 @@ const LABEL_META = {
   }
 
   function handleArticle(article) {
-    if (!enabled) return;
+    if (!enabled || limitReached || manuallyStopped) return;
     if (article.dataset.jevProcessed === "1") return;
 
     const tweetId = extractTweetId(article);
@@ -256,6 +291,11 @@ const LABEL_META = {
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
+            if (limitReached || manuallyStopped) {
+              observer.disconnect();
+              articleObservers.delete(article);
+              return;
+            }
             requestClassification(article, tweetId, text);
             observer.disconnect();
             articleObservers.delete(article);
@@ -270,7 +310,16 @@ const LABEL_META = {
 
   function requestClassification(article, tweetId, text) {
     if (requestedTweetIds.has(tweetId)) return;
+    if (limitReached || manuallyStopped) return;
     requestedTweetIds.add(tweetId);
+
+    sessionClassifiedCount += 1;
+    inFlightCount += 1;
+    updateSessionUi();
+
+    if (sessionClassifiedCount >= sessionLimit) {
+      onLimitReached();
+    }
 
     const engagement = extractEngagement(article);
     const url = extractPostUrl(article, tweetId);
@@ -278,6 +327,9 @@ const LABEL_META = {
     chrome.runtime.sendMessage(
       { type: MESSAGE_TYPES.CLASSIFY_POST, tweetId, url, text, engagement },
       (response) => {
+        inFlightCount = Math.max(0, inFlightCount - 1);
+        updateSessionUi();
+
         if (chrome.runtime.lastError) {
           // Extension context gone / background unreachable — omit badge.
           return;
@@ -355,6 +407,56 @@ const LABEL_META = {
   // chrome.storage.onChanged.
 
   let countsButtonEl = null;
+  let progressBarFillEl = null;
+  let progressWrapEl = null;
+  let stopButtonEl = null;
+  let limitBannerEl = null;
+
+  function onLimitReached() {
+    if (limitReached) return;
+    limitReached = true;
+    stopObserving();
+
+    if (autoReload) {
+      renderLimitBanner("Limit reached — reloading…");
+      setTimeout(() => window.location.reload(), 1200);
+    } else {
+      renderLimitBanner("Limit reached — reload to continue");
+    }
+  }
+
+  function renderLimitBanner(message) {
+    if (!limitBannerEl) return;
+    limitBannerEl.hidden = false;
+    limitBannerEl.querySelector(".jev-limit-text").textContent = message;
+  }
+
+  function updateSessionUi() {
+    if (progressBarFillEl) {
+      const pct = sessionLimit > 0 ? Math.min(100, (sessionClassifiedCount / sessionLimit) * 100) : 0;
+      progressBarFillEl.style.width = `${pct}%`;
+    }
+    if (progressWrapEl) {
+      progressWrapEl.classList.toggle("jev-progress-active", inFlightCount > 0);
+      progressWrapEl.title = `${sessionClassifiedCount} / ${sessionLimit} classified this session${
+        inFlightCount > 0 ? ` · ${inFlightCount} in flight` : ""
+      }`;
+    }
+    if (stopButtonEl) {
+      stopButtonEl.textContent = manuallyStopped ? "▶" : "⏸";
+      stopButtonEl.title = manuallyStopped ? "Resume scanning" : "Stop scanning";
+    }
+  }
+
+  function toggleManualStop() {
+    manuallyStopped = !manuallyStopped;
+    if (manuallyStopped) {
+      stopObserving();
+    } else if (enabled && !limitReached) {
+      startObserving();
+    }
+    updateSessionUi();
+  }
 
   function countLabels(records) {
     const counts = { breaking: 0, golden_nugget: 0, ai_slop: 0 };
@@ -387,6 +489,9 @@ const LABEL_META = {
     const widget = document.createElement("div");
     widget.className = "jev-counter-widget";
 
+    const topRow = document.createElement("div");
+    topRow.className = "jev-counter-top-row";
+
     countsButtonEl = document.createElement("button");
     countsButtonEl.type = "button";
     countsButtonEl.className = "jev-counter-counts";
@@ -394,6 +499,16 @@ const LABEL_META = {
     countsButtonEl.textContent = "⚡ 0 · 🪙 0 · 🤖 0";
     countsButtonEl.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: MESSAGE_TYPES.OPEN_DASHBOARD });
+    });
+
+    stopButtonEl = document.createElement("button");
+    stopButtonEl.type = "button";
+    stopButtonEl.className = "jev-counter-stop-btn";
+    stopButtonEl.title = "Stop scanning";
+    stopButtonEl.textContent = "⏸";
+    stopButtonEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleManualStop();
     });
 
     const keyButtonEl = document.createElement("button");
@@ -406,10 +521,33 @@ const LABEL_META = {
       openApiKeyModal();
     });
 
-    widget.appendChild(countsButtonEl);
-    widget.appendChild(keyButtonEl);
+    topRow.appendChild(countsButtonEl);
+    topRow.appendChild(stopButtonEl);
+    topRow.appendChild(keyButtonEl);
+
+    progressWrapEl = document.createElement("div");
+    progressWrapEl.className = "jev-progress-wrap";
+    progressBarFillEl = document.createElement("div");
+    progressBarFillEl.className = "jev-progress-fill";
+    progressWrapEl.appendChild(progressBarFillEl);
+
+    limitBannerEl = document.createElement("div");
+    limitBannerEl.className = "jev-limit-banner";
+    limitBannerEl.hidden = true;
+    limitBannerEl.innerHTML = `
+      <span class="jev-limit-text"></span>
+      <button type="button" class="jev-limit-reload-btn">Reload now</button>
+    `;
+    limitBannerEl
+      .querySelector(".jev-limit-reload-btn")
+      .addEventListener("click", () => window.location.reload());
+
+    widget.appendChild(topRow);
+    widget.appendChild(progressWrapEl);
+    widget.appendChild(limitBannerEl);
     document.body.appendChild(widget);
     refreshCounterWidget();
+    updateSessionUi();
   }
 
   chrome.storage.onChanged.addListener((changes, areaName) => {

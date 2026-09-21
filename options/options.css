@@ -164,7 +164,11 @@ h1 {
   transform: translateX(18px);
 }
 
-#preference {
+#preference,
+#session-limit,
+#criteria-breaking,
+#criteria-golden,
+#criteria-slop {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -174,6 +178,16 @@ h1 {
   background: var(--bg);
   color: var(--text);
   resize: vertical;
+  box-sizing: border-box;
+}
+
+#session-limit {
+  max-width: 140px;
+}
+
+.field-label + textarea,
+.field-label + input {
+  margin-top: 6px;
 }
 
 .radio-group {

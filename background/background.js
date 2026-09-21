@@ -15,6 +15,7 @@ import {
   LABELS,
   MAX_POST_RECORDS,
   DASHBOARD_PATH,
+  DEFAULT_CRITERIA,
 } from "../shared/contract.js";
 
 /** @typedef {import("../shared/contract.js").Label} Label */
@@ -27,13 +28,6 @@ const REQUEST_TIMEOUT_MS = 8000;
 
 const CLASSIFY_INSTRUCTIONS =
   "Classify this X/Twitter post as Breaking, Golden Nugget, or AI Slop.";
-
-/** @type {Record<Label, string>} */
-const BASE_CHOICE_CRITERIA = {
-  breaking: "Breaking news, urgent or time-sensitive, important developing information.",
-  golden_nugget: "Valuable, insightful, high-quality content worth reading closely.",
-  ai_slop: "Low-quality, generic, or likely AI-generated filler content.",
-};
 
 /** In-memory cache: tweetId -> Label. Hydrated from storage on worker startup. */
 const classificationCache = new Map();
@@ -86,18 +80,39 @@ async function getPreference() {
 }
 
 /**
+ * Reads the user-editable criteria overrides from chrome.storage.local.
+ * Any label missing/blank in the override falls back to DEFAULT_CRITERIA.
+ * @returns {Promise<Record<Label, string>>}
+ */
+async function getCriteria() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.CRITERIA);
+  const stored = result[STORAGE_KEYS.CRITERIA];
+  /** @type {Record<Label, string>} */
+  const criteria = { ...DEFAULT_CRITERIA };
+  if (stored && typeof stored === "object") {
+    for (const label of LABELS) {
+      if (typeof stored[label] === "string" && stored[label].trim()) {
+        criteria[label] = stored[label].trim();
+      }
+    }
+  }
+  return criteria;
+}
+
+/**
  * Builds the golden_nugget criteria description, appending the user's
  * stated preference when one is set.
+ * @param {Record<Label, string>} baseCriteria
  * @param {string} preference
  * @returns {Record<Label, string>}
  */
-function buildChoiceCriteria(preference) {
+function buildChoiceCriteria(baseCriteria, preference) {
   if (!preference) {
-    return BASE_CHOICE_CRITERIA;
+    return baseCriteria;
   }
   return {
-    ...BASE_CHOICE_CRITERIA,
-    golden_nugget: `${BASE_CHOICE_CRITERIA.golden_nugget} The user is specifically interested in: "${preference}".`,
+    ...baseCriteria,
+    golden_nugget: `${baseCriteria.golden_nugget} The user is specifically interested in: "${preference}".`,
   };
 }
 
@@ -136,10 +151,11 @@ async function persistPostRecord(record) {
  * @param {string} apiKey
  * @param {string} text
  * @param {Engagement} engagement
+ * @param {Record<Label, string>} baseCriteria
  * @param {string} preference
  * @returns {Promise<Label>}
  */
-async function callJevOnce(apiKey, text, engagement, preference) {
+async function callJevOnce(apiKey, text, engagement, baseCriteria, preference) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -157,7 +173,7 @@ async function callJevOnce(apiKey, text, engagement, preference) {
           label: {
             type: "choice",
             instructions: CLASSIFY_INSTRUCTIONS,
-            criteria: buildChoiceCriteria(preference),
+            criteria: buildChoiceCriteria(baseCriteria, preference),
           },
         },
       }),
@@ -187,14 +203,15 @@ async function callJevOnce(apiKey, text, engagement, preference) {
  * @param {string} apiKey
  * @param {string} text
  * @param {Engagement} engagement
+ * @param {Record<Label, string>} baseCriteria
  * @param {string} preference
  * @returns {Promise<Label>}
  */
-async function classifyWithRetry(apiKey, text, engagement, preference) {
+async function classifyWithRetry(apiKey, text, engagement, baseCriteria, preference) {
   try {
-    return await callJevOnce(apiKey, text, engagement, preference);
+    return await callJevOnce(apiKey, text, engagement, baseCriteria, preference);
   } catch (firstError) {
-    return await callJevOnce(apiKey, text, engagement, preference);
+    return await callJevOnce(apiKey, text, engagement, baseCriteria, preference);
   }
 }
 
@@ -223,8 +240,8 @@ async function handleClassifyPost(request) {
   }
 
   try {
-    const preference = await getPreference();
-    const label = await classifyWithRetry(apiKey, text, safeEngagement, preference);
+    const [preference, baseCriteria] = await Promise.all([getPreference(), getCriteria()]);
+    const label = await classifyWithRetry(apiKey, text, safeEngagement, baseCriteria, preference);
     classificationCache.set(tweetId, label);
 
     /** @type {PostRecord} */
