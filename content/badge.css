@@ -1,0 +1,77 @@
+/* Jev X Scanner — "Jev Judged" badge styles */
+
+.jev-badge {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2147483000;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+
+  box-sizing: border-box;
+  max-width: calc(100% - 16px);
+
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  color: #f7f9f9;
+  background: rgba(15, 20, 25, 0.78);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+
+  /* Purely decorative overlay — don't steal clicks meant for the post
+     (links, media, like/reply buttons, etc.) underneath it. */
+  pointer-events: none;
+
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+/* The "Set API key" badge is interactive, so it must accept clicks. */
+button.jev-badge {
+  pointer-events: auto;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+button.jev-badge:hover {
+  background: rgba(15, 20, 25, 0.92);
+}
+
+button.jev-badge:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 1px;
+}
+
+/* Per-label accents */
+
+.jev-badge-breaking {
+  border-color: rgba(249, 24, 128, 0.55);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(249, 24, 128, 0.12);
+}
+
+.jev-badge-golden {
+  border-color: rgba(255, 191, 0, 0.55);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 191, 0, 0.12);
+}
+
+.jev-badge-slop {
+  border-color: rgba(150, 158, 164, 0.55);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(150, 158, 164, 0.1);
+  color: #d3d6d8;
+}
+
+.jev-badge-set-key {
+  border-color: rgba(29, 155, 240, 0.6);
+}

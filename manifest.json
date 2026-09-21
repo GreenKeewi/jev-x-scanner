@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Jev X Scanner",
+  "version": "0.1.0",
+  "description": "Real-time X/Twitter post classifier: Breaking, Golden Nugget, or AI Slop — powered by Jev.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://api.typesafe.ai/*"
+  ],
+  "background": {
+    "service_worker": "background/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content/content.js"],
+      "css": ["content/badge.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options/options.html"
+}

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Jev X Scanner — Settings</title>
+<link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <main class="wrap">
+    <h1>Jev X Scanner</h1>
+    <p class="intro">
+      Classifies posts on X/Twitter in real time as "Breaking", "Golden Nugget", or
+      "AI Slop" using the Jev API, so you can triage your feed at a glance.
+      Get a TypeSafe API key at
+      <a href="https://docs.typesafe.ai" target="_blank" rel="noopener noreferrer">docs.typesafe.ai</a>.
+    </p>
+
+    <section class="card">
+      <label class="field-label" for="api-key">Jev API key</label>
+      <div class="key-row">
+        <input type="password" id="api-key" autocomplete="off" spellcheck="false" placeholder="Paste your API key" />
+        <button type="button" id="toggle-visibility" class="btn-secondary">Show</button>
+        <button type="button" id="save-key" class="btn-primary">Save</button>
+      </div>
+      <p id="key-status" class="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card">
+      <label class="switch-row" for="enabled-toggle">
+        <span class="field-label">Enable Jev X Scanner</span>
+        <input type="checkbox" id="enabled-toggle" />
+        <span class="switch"></span>
+      </label>
+    </section>
+
+    <section class="card">
+      <span class="field-label">Throttle mode</span>
+      <p class="hint">Controls when posts get sent off for classification.</p>
+      <div class="radio-group">
+        <label class="radio-row">
+          <input type="radio" name="throttle-mode" value="viewport" id="throttle-viewport" />
+          Classify only visible posts (recommended)
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="throttle-mode" value="on_add" id="throttle-on-add" />
+          Classify posts as soon as they load
+        </label>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>
