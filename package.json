@@ -1,0 +1,8 @@
+{
+  "name": "x-api-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read-only, password-protected dashboard for the X developer API",
+  "scripts": { "start": "node server/server.js" },
+  "engines": { "node": ">=18" }
+}

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X API Dashboard</title>
+<style>
+  :root { --bg:#0e1116; --card:#161b22; --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --err:#f85149; --line:#30363d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:16px; }
+  header a { color:var(--muted); text-decoration:none; font-size:13px; }
+  .pill { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); } .dot.err { background:var(--err); }
+  main { padding:20px; max-width:1200px; margin:0 auto; display:grid; gap:16px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card h2 { margin:0 0 10px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600; }
+  .big { font-size:26px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .sub { color:var(--muted); font-size:12px; }
+  .two { display:grid; gap:16px; grid-template-columns:1fr 1fr; }
+  @media (max-width:800px) { .two { grid-template-columns:1fr; } main { padding:12px; } }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  #logs { height:320px; overflow:auto; background:#0a0d12; border-radius:8px; padding:10px; font:12px/1.5 ui-monospace,Consolas,monospace; }
+  #logs div { white-space:pre-wrap; word-break:break-word; }
+  .l-info { color:var(--text); } .l-warn { color:var(--warn); } .l-error { color:var(--err); }
+  .t { color:var(--muted); }
+  svg { width:100%; height:120px; display:block; }
+  .banner { background:#3d2f00; border:1px solid var(--warn); color:#f2cc60; border-radius:8px; padding:10px 14px; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>X API Dashboard <span class="sub">(read-only)</span></h1>
+  <div style="display:flex;gap:16px;align-items:center">
+    <span class="pill"><span class="dot" id="live"></span><span id="liveText">connecting</span></span>
+    <a href="/logout">Sign out</a>
+  </div>
+</header>
+<main>
+  <div class="banner" id="banner"></div>
+
+  <section class="grid">
+    <div class="card"><h2>Uptime</h2><div class="big" id="uptime">-</div><div class="sub" id="since"></div></div>
+    <div class="card"><h2>Polls</h2><div class="big" id="polls">-</div><div class="sub" id="pollsSub"></div></div>
+    <div class="card"><h2>API requests</h2><div class="big" id="reqs">-</div><div class="sub" id="nextPoll"></div></div>
+    <div class="card"><h2>Followers</h2><div class="big" id="followers">-</div><div class="sub" id="acct"></div></div>
+    <div class="card"><h2>Following</h2><div class="big" id="following">-</div></div>
+    <div class="card"><h2>Total posts</h2><div class="big" id="tweetCount">-</div></div>
+  </section>
+
+  <section class="two">
+    <div class="card"><h2>Followers over time</h2><svg id="chart" viewBox="0 0 400 120" preserveAspectRatio="none"></svg><div class="sub" id="chartSub"></div></div>
+    <div class="card"><h2>Project usage (posts read)</h2><div class="big" id="usage">-</div><div class="sub" id="usageSub"></div></div>
+  </section>
+
+  <section class="two">
+    <div class="card"><h2>Rate limits</h2>
+      <table><thead><tr><th>Endpoint</th><th class="num">Left</th><th class="num">Resets</th></tr></thead><tbody id="rl"></tbody></table>
+    </div>
+    <div class="card"><h2>Requests by endpoint</h2>
+      <table><thead><tr><th>Endpoint</th><th class="num">Count</th></tr></thead><tbody id="byEp"></tbody></table>
+    </div>
+  </section>
+
+  <section class="card"><h2>Recent posts</h2>
+    <table><thead><tr><th>Post</th><th class="num">Likes</th><th class="num">Reposts</th><th class="num">Replies</th><th class="num">Views</th></tr></thead><tbody id="tweets"></tbody></table>
+  </section>
+
+  <section class="card"><h2>Live logs</h2><div id="logs"></div></section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => (n == null ? '-' : Number(n).toLocaleString());
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+function dur(ms) {
+  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return (d ? d + 'd ' : '') + (h || d ? h + 'h ' : '') + m + 'm ' + (s % 60) + 's';
+}
+let offset = 0, startedAt = 0;
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/stats');
+    if (r.status === 401) return (location.href = '/login');
+    const s = await r.json();
+    offset = s.now - Date.now(); startedAt = s.startedAt;
+    $('since').textContent = 'since ' + new Date(s.startedAt).toLocaleString();
+    $('polls').textContent = fmt(s.polls.total);
+    $('pollsSub').textContent = `${s.polls.ok} ok / ${s.polls.failed} failed` + (s.polls.lastError ? ' - ' + s.polls.lastError : '');
+    $('reqs').textContent = fmt(s.requests.total);
+    $('nextPoll').textContent = s.polls.next ? 'next poll ' + new Date(s.polls.next).toLocaleTimeString() : `every ${s.pollIntervalSeconds}s`;
+    const b = $('banner');
+    if (!s.hasToken) { b.style.display = 'block'; b.textContent = 'X_BEARER_TOKEN is not set in .env. Add it and restart the server.'; }
+    else if (!s.username) { b.style.display = 'block'; b.textContent = 'X_USERNAME is not set in .env, so account stats are hidden (usage only).'; }
+    else b.style.display = 'none';
+
+    const pm = s.user && s.user.public_metrics;
+    $('followers').textContent = pm ? fmt(pm.followers_count) : '-';
+    $('following').textContent = pm ? fmt(pm.following_count) : '-';
+    $('tweetCount').textContent = pm ? fmt(pm.tweet_count) : '-';
+    $('acct').textContent = s.user ? '@' + s.user.username : '';
+
+    if (s.usage) {
+      $('usage').textContent = fmt(s.usage.project_usage) + (s.usage.project_cap ? ' / ' + fmt(s.usage.project_cap) : '');
+      $('usageSub').textContent = s.usage.cap_reset_day ? 'cap resets on day ' + s.usage.cap_reset_day + ' of the month' : '';
+    }
+
+    $('rl').innerHTML = Object.entries(s.rateLimits).map(([e, v]) =>
+      `<tr><td>${esc(e)}</td><td class="num">${v.remaining} / ${v.limit}</td><td class="num">${new Date(v.reset).toLocaleTimeString()}</td></tr>`).join('') || '<tr><td colspan="3" class="sub">No data yet</td></tr>';
+    $('byEp').innerHTML = Object.entries(s.requests.byEndpoint).map(([e, n]) =>
+      `<tr><td>${esc(e)}</td><td class="num">${fmt(n)}</td></tr>`).join('') || '<tr><td colspan="2" class="sub">No data yet</td></tr>';
+    $('tweets').innerHTML = s.tweets.map((t) => { const m = t.public_metrics || {}; return `<tr><td>${esc(t.text.slice(0, 140))}<div class="sub">${new Date(t.created_at).toLocaleString()}</div></td><td class="num">${fmt(m.like_count)}</td><td class="num">${fmt(m.retweet_count)}</td><td class="num">${fmt(m.reply_count)}</td><td class="num">${fmt(m.impression_count)}</td></tr>`; }).join('') || '<tr><td colspan="5" class="sub">No posts yet</td></tr>';
+    drawChart(s.history);
+  } catch (e) { /* next tick retries */ }
+}
+
+function drawChart(h) {
+  const svg = $('chart');
+  if (h.length < 2) { svg.innerHTML = ''; $('chartSub').textContent = 'Collecting data (needs 2+ polls)'; return; }
+  const ys = h.map((p) => p.followers), min = Math.min(...ys), max = Math.max(...ys), span = max - min || 1;
+  const pts = h.map((p, i) => `${(i / (h.length - 1)) * 400},${110 - ((p.followers - min) / span) * 100}`).join(' ');
+  svg.innerHTML = `<polyline points="${pts}" fill="none" stroke="#58a6ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  $('chartSub').textContent = `${fmt(min)} - ${fmt(max)} over ${h.length} samples`;
+}
+
+function addLog(e, box) {
+  const el = document.createElement('div');
+  el.className = 'l-' + e.level;
+  el.innerHTML = `<span class="t">${new Date(e.t).toLocaleTimeString()}</span> ${esc(e.level.toUpperCase())} ${esc(e.msg)}${e.meta ? ' ' + esc(JSON.stringify(e.meta)) : ''}`;
+  const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+  box.appendChild(el);
+  while (box.children.length > 500) box.removeChild(box.firstChild);
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
+async function initLogs() {
+  const box = $('logs');
+  const r = await fetch('/api/logs');
+  if (r.ok) (await r.json()).forEach((e) => addLog(e, box));
+  box.scrollTop = box.scrollHeight;
+  const es = new EventSource('/api/logs/stream');
+  es.onopen = () => { $('live').className = 'dot ok'; $('liveText').textContent = 'live'; };
+  es.onerror = () => { $('live').className = 'dot err'; $('liveText').textContent = 'reconnecting'; };
+  es.onmessage = (m) => addLog(JSON.parse(m.data), box);
+}
+
+setInterval(() => { if (startedAt) $('uptime').textContent = dur(Date.now() + offset - startedAt); }, 1000);
+refresh(); setInterval(refresh, 10000); initLogs();
+</script>
+</body>
+</html>

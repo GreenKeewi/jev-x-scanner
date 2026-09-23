@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in</title>
+<style>
+  :root { --bg:#0e1116; --card:#161b22; --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --err:#f85149; --line:#30363d; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,sans-serif; }
+  form { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:28px; width:min(340px,90vw); }
+  h1 { margin:0 0 4px; font-size:18px; }
+  p { margin:0 0 18px; color:var(--muted); font-size:13px; }
+  input, button { width:100%; padding:10px 12px; border-radius:8px; font:inherit; }
+  input { background:var(--bg); border:1px solid var(--line); color:var(--text); margin-bottom:12px; }
+  input:focus { outline:2px solid var(--accent); border-color:transparent; }
+  button { background:var(--accent); color:#04122a; border:0; font-weight:600; cursor:pointer; }
+  .err { color:var(--err); font-size:13px; margin:0 0 12px; display:none; }
+  .show .err { display:block; }
+</style>
+</head>
+<body>
+<form method="post" action="/login" id="f">
+  <h1>X API Dashboard</h1>
+  <p>Read-only. Enter the password to continue.</p>
+  <div class="err">Incorrect password (or too many attempts).</div>
+  <input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
+  <button type="submit">Sign in</button>
+</form>
+<script>if (location.search.includes('error')) document.getElementById('f').classList.add('show');</script>
+</body>
+</html>
