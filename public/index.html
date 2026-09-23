@@ -31,6 +31,12 @@
   .l-info { color:var(--text); } .l-warn { color:var(--warn); } .l-error { color:var(--err); }
   .t { color:var(--muted); }
   svg { width:100%; height:120px; display:block; }
+  .filters { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .filters button { background:var(--bg); color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:4px 12px; font:inherit; font-size:12px; cursor:pointer; }
+  .filters button.on { color:var(--text); border-color:var(--accent); }
+  .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; white-space:nowrap; }
+  .b-breaking { background:#3d1418; color:#ff7b72; } .b-golden_nugget { background:#3d2f00; color:#f2cc60; } .b-ai_slop { background:#21262d; color:var(--muted); } .b-none { background:#21262d; color:var(--warn); }
+  td a { color:var(--accent); text-decoration:none; }
   .banner { background:#3d2f00; border:1px solid var(--warn); color:#f2cc60; border-radius:8px; padding:10px 14px; display:none; }
 </style>
 </head>
@@ -68,7 +74,21 @@
     </div>
   </section>
 
-  <section class="card"><h2>Recent posts</h2>
+  <section class="card">
+    <h2>Scanner <span class="sub" id="scanInfo"></span></h2>
+    <div class="grid" style="margin-bottom:12px">
+      <div class="card"><h2>Scanned</h2><div class="big" id="sTotal">-</div><div class="sub" id="sQueue"></div></div>
+      <div class="card"><h2>&#9889; Breaking</h2><div class="big" id="cBreaking">-</div></div>
+      <div class="card"><h2>&#129689; Golden Nugget</h2><div class="big" id="cGolden">-</div></div>
+      <div class="card"><h2>&#129302; Slop</h2><div class="big" id="cSlop">-</div></div>
+    </div>
+    <div class="filters" id="filters">
+      <button data-f="" class="on">All</button><button data-f="breaking">Breaking</button><button data-f="golden_nugget">Golden Nugget</button><button data-f="ai_slop">Slop</button><button data-f="unlabeled">Unlabeled</button>
+    </div>
+    <table><thead><tr><th>Post</th><th>Label</th><th class="num">Likes</th><th class="num">Views</th></tr></thead><tbody id="scanPosts"></tbody></table>
+  </section>
+
+  <section class="card"><h2>Recent posts (tracked account)</h2>
     <table><thead><tr><th>Post</th><th class="num">Likes</th><th class="num">Reposts</th><th class="num">Replies</th><th class="num">Views</th></tr></thead><tbody id="tweets"></tbody></table>
   </section>
 
@@ -98,8 +118,15 @@ async function refresh() {
     $('nextPoll').textContent = s.polls.next ? 'next poll ' + new Date(s.polls.next).toLocaleTimeString() : `every ${s.pollIntervalSeconds}s`;
     const b = $('banner');
     if (!s.hasToken) { b.style.display = 'block'; b.textContent = 'X_BEARER_TOKEN is not set in .env. Add it and restart the server.'; }
-    else if (!s.username) { b.style.display = 'block'; b.textContent = 'X_USERNAME is not set in .env, so account stats are hidden (usage only).'; }
+    else if (!s.username && !s.scan.watch.length) { b.style.display = 'block'; b.textContent = 'Set X_USERNAME (own-account stats) and/or X_WATCH_ACCOUNTS (accounts to scan) in .env, then restart the server.'; }
+    else if (s.scan.watch.length && !s.scan.hasJevKey) { b.style.display = 'block'; b.textContent = 'JEV_API_KEY is not set in .env, so scanned posts are collected but not labeled.'; }
     else b.style.display = 'none';
+    const sc = s.scan;
+    $('scanInfo').textContent = sc.watch.length ? `${sc.watch.length} account(s)` + (sc.query ? ` matching "${sc.query}"` : '') : '(no X_WATCH_ACCOUNTS set)';
+    $('sTotal').textContent = fmt(sc.total);
+    $('sQueue').textContent = `${sc.queued + sc.active} labeling, ${sc.unlabeled} unlabeled, ${sc.jevFailed} failed`;
+    $('cBreaking').textContent = fmt(sc.counts.breaking); $('cGolden').textContent = fmt(sc.counts.golden_nugget); $('cSlop').textContent = fmt(sc.counts.ai_slop);
+    loadPosts();
 
     const pm = s.user && s.user.public_metrics;
     $('followers').textContent = pm ? fmt(pm.followers_count) : '-';
@@ -120,6 +147,25 @@ async function refresh() {
     drawChart(s.history);
   } catch (e) { /* next tick retries */ }
 }
+
+let filter = '';
+const LABEL_TEXT = { breaking: '⚡ Breaking', golden_nugget: '🪙 Golden Nugget', ai_slop: '🤖 Slop' };
+async function loadPosts() {
+  try {
+    const r = await fetch('/api/posts?limit=100' + (filter ? '&label=' + filter : ''));
+    if (!r.ok) return;
+    $('scanPosts').innerHTML = (await r.json()).map((p) => {
+      const badge = p.label ? `<span class="badge b-${p.label}">${LABEL_TEXT[p.label]}</span>` : `<span class="badge b-none">${p.error ? 'failed' : 'pending'}</span>`;
+      return `<tr><td><a href="${esc(p.url)}" target="_blank" rel="noopener">@${esc(p.author)}</a> ${esc(p.text.slice(0, 200))}<div class="sub">${new Date(p.createdAt).toLocaleString()}${p.error ? ' - ' + esc(p.error) : ''}</div></td><td>${badge}</td><td class="num">${fmt(p.metrics.likes)}</td><td class="num">${fmt(p.metrics.views)}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="sub">No scanned posts yet</td></tr>';
+  } catch (e) { /* next tick retries */ }
+}
+$('filters').addEventListener('click', (e) => {
+  if (!e.target.dataset || e.target.dataset.f === undefined) return;
+  filter = e.target.dataset.f;
+  document.querySelectorAll('#filters button').forEach((b) => b.classList.toggle('on', b === e.target));
+  loadPosts();
+});
 
 function drawChart(h) {
   const svg = $('chart');

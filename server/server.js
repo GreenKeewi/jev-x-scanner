@@ -24,6 +24,14 @@ const cfg = {
   username: (process.env.X_USERNAME || '').replace(/^@/, ''),
   pollSeconds: Math.max(60, Number(process.env.POLL_INTERVAL_SECONDS) || 300),
   secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  // scanning: watch these accounts (optionally filtered by a keyword query) and label each post with Jev
+  watch: (process.env.X_WATCH_ACCOUNTS || '').split(',').map((s) => s.trim().replace(/^@/, '')).filter(Boolean),
+  query: (process.env.X_SEARCH_QUERY || '').trim(),
+  includeReplies: /^(1|true|yes)$/i.test(process.env.X_INCLUDE_REPLIES || ''),
+  maxPerPoll: Math.min(100, Math.max(10, Number(process.env.MAX_POSTS_PER_POLL) || 50)),
+  jevKey: process.env.JEV_API_KEY || '',
+  jevConcurrency: Math.min(16, Math.max(1, Number(process.env.JEV_CONCURRENCY) || 4)),
+  jevPreference: (process.env.JEV_PREFERENCE || '').trim(),
 };
 if (!cfg.password) { console.error('DASHBOARD_PASSWORD is not set in .env'); process.exit(1); }
 
@@ -73,8 +81,160 @@ async function xGet(endpoint, pathAndQuery) {
   }
   const body = await res.json().catch(() => ({}));
   log(res.ok ? 'info' : 'error', `GET ${endpoint} -> ${res.status}`, res.ok ? undefined : body);
-  if (!res.ok) throw new Error(`${endpoint} ${res.status}: ${body.detail || body.title || 'request failed'}`);
+  if (!res.ok) {
+    const err = new Error(`${endpoint} ${res.status}: ${body.detail || body.title || 'request failed'}`);
+    err.status = res.status;
+    throw err;
+  }
   return body;
+}
+
+// ---------- scanned posts + Jev labelling ----------
+const POSTS_FILE = path.join(ROOT, 'data', 'posts.json');
+const POSTS_MAX = 2000;
+const LABELS = ['breaking', 'golden_nugget', 'ai_slop'];
+const CRITERIA = {
+  breaking: 'Breaking news, urgent or time-sensitive, important developing information.',
+  golden_nugget: 'Valuable, insightful, high-quality content worth reading closely.',
+  ai_slop: 'Low-quality, generic, or likely AI-generated filler content.',
+};
+let posts = []; // newest first: {id,url,author,text,createdAt,metrics,label,error}
+try { posts = JSON.parse(fs.readFileSync(POSTS_FILE, 'utf8')); } catch { /* first run */ }
+const seen = new Set(posts.map((p) => p.id));
+const sinceIds = new Map(); // scan-group key -> newest tweet id seen
+let userIds = null;         // username(lowercase) -> id (timeline fallback)
+let postsDirty = false;
+setInterval(() => {
+  if (!postsDirty) return;
+  postsDirty = false;
+  try { fs.mkdirSync(path.dirname(POSTS_FILE), { recursive: true }); fs.writeFileSync(POSTS_FILE, JSON.stringify(posts.slice(0, POSTS_MAX))); }
+  catch (e) { log('warn', `saving posts failed: ${e.message}`); }
+}, 5000).unref();
+
+const jevQueue = [];
+let jevActive = 0;
+let jevKeyWarned = false;
+const jev = { done: 0, failed: 0 };
+
+async function callJev(p) {
+  const criteria = { ...CRITERIA };
+  if (cfg.jevPreference) criteria.golden_nugget += ` The user is specifically interested in: "${cfg.jevPreference}".`;
+  const res = await fetch('https://api.typesafe.ai/v1/systemone', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cfg.jevKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'jev-latest',
+      state: { post: p.text, engagement: { views: p.metrics.views, likes: p.metrics.likes, replies: p.metrics.replies, reposts: p.metrics.reposts } },
+      questions: { label: { type: 'choice', instructions: 'Classify this X/Twitter post as Breaking, Golden Nugget, or AI Slop.', criteria } },
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`Jev API responded ${res.status}`);
+  const choice = (await res.json())?.answers?.label?.choice;
+  if (!LABELS.includes(choice)) throw new Error('unexpected Jev response');
+  return choice;
+}
+async function labelPost(p) {
+  try {
+    try { p.label = await callJev(p); } catch { p.label = await callJev(p); } // one retry
+    p.error = undefined;
+    jev.done++;
+    log('info', `labeled @${p.author} ${p.id}: ${p.label}`);
+  } catch (e) {
+    p.error = e.message;
+    jev.failed++;
+    log('error', `Jev failed for ${p.id}: ${e.message}`);
+  }
+  postsDirty = true;
+}
+function pumpJev() {
+  while (jevActive < cfg.jevConcurrency && jevQueue.length) {
+    const p = jevQueue.shift();
+    jevActive++;
+    labelPost(p).finally(() => { jevActive--; pumpJev(); });
+  }
+}
+function queueLabel(p) {
+  if (!cfg.jevKey) {
+    if (!jevKeyWarned) { jevKeyWarned = true; log('warn', 'JEV_API_KEY not set: posts are collected but not labeled'); }
+    return;
+  }
+  jevQueue.push(p);
+  pumpJev();
+}
+for (const p of [...posts].reverse()) if (!p.label) queueLabel(p); // resume unlabeled posts after a restart
+
+function ingest(t, author) {
+  if (seen.has(t.id)) return false;
+  seen.add(t.id);
+  const m = t.public_metrics || {};
+  const p = {
+    id: t.id, url: `https://x.com/${author}/status/${t.id}`, author, text: t.text, createdAt: t.created_at,
+    metrics: { views: m.impression_count || 0, likes: m.like_count || 0, replies: m.reply_count || 0, reposts: m.retweet_count || 0 },
+    label: null,
+  };
+  posts.unshift(p);
+  if (posts.length > POSTS_MAX) posts.length = POSTS_MAX;
+  postsDirty = true;
+  queueLabel(p);
+  return true;
+}
+const newer = (a, b) => (!b || BigInt(a) > BigInt(b) ? a : b);
+
+async function scanViaSearch() {
+  const groups = [];
+  for (let i = 0; i < cfg.watch.length; i += 12) groups.push(cfg.watch.slice(i, i + 12)); // keep query under length limit
+  let added = 0;
+  for (const g of groups) {
+    const key = g.join(',');
+    const q = `(${g.map((a) => 'from:' + a).join(' OR ')}) -is:retweet${cfg.includeReplies ? '' : ' -is:reply'}${cfg.query ? ' ' + cfg.query : ''}`;
+    const since = sinceIds.get(key) ? `&since_id=${sinceIds.get(key)}` : '';
+    const b = await xGet('tweets/search/recent',
+      `/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=${cfg.maxPerPoll}&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username${since}`);
+    const names = new Map((b.includes?.users || []).map((u) => [u.id, u.username]));
+    for (const t of b.data || []) {
+      if (ingest(t, names.get(t.author_id) || 'i')) added++;
+      sinceIds.set(key, newer(t.id, sinceIds.get(key)));
+    }
+  }
+  return added;
+}
+async function scanViaTimelines() {
+  if (!userIds) {
+    userIds = new Map();
+    for (let i = 0; i < cfg.watch.length; i += 100) {
+      const b = await xGet('users/by', `/2/users/by?usernames=${encodeURIComponent(cfg.watch.slice(i, i + 100).join(','))}`);
+      for (const u of b.data || []) userIds.set(u.username.toLowerCase(), { id: u.id, name: u.username });
+      for (const e of b.errors || []) log('warn', `watch account not found: ${e.value || e.detail}`);
+    }
+  }
+  let added = 0;
+  for (const { id, name } of userIds.values()) {
+    const excl = cfg.includeReplies ? 'retweets' : 'retweets,replies';
+    const since = sinceIds.get(id) ? `&since_id=${sinceIds.get(id)}` : '';
+    const b = await xGet('users/:id/tweets', `/2/users/${id}/tweets?max_results=${cfg.maxPerPoll}&exclude=${excl}&tweet.fields=created_at,public_metrics${since}`);
+    for (const t of b.data || []) {
+      if (cfg.query && !cfg.query.toLowerCase().split(/\s+/).some((w) => w && t.text.toLowerCase().includes(w.replace(/^["(]+|[")]+$/g, '')))) continue;
+      if (ingest(t, name)) added++;
+      sinceIds.set(id, newer(t.id, sinceIds.get(id)));
+    }
+  }
+  return added;
+}
+let useTimelines = false;
+async function scanAccounts() {
+  if (!cfg.watch.length) return;
+  let added;
+  if (!useTimelines) {
+    try { added = await scanViaSearch(); }
+    catch (e) {
+      if (e.status !== 403 && e.status !== 400) throw e;
+      useTimelines = true;
+      log('warn', 'search endpoint unavailable on this API tier; falling back to per-account timelines (keyword query is applied as a simple text filter)');
+    }
+  }
+  if (useTimelines) added = await scanViaTimelines();
+  log('info', `scan finished: ${added} new post(s) from ${cfg.watch.length} account(s)`);
 }
 
 async function poll() {
@@ -99,6 +259,7 @@ async function poll() {
       });
     }
   }
+  await attempt(scanAccounts);
   await attempt(async () => { state.usage = (await xGet('usage/tweets', '/2/usage/tweets')).data; });
 
   if (failures === 0) { state.polls.ok++; state.polls.lastError = null; } else state.polls.failed++;
@@ -152,6 +313,12 @@ function snapshot() {
     hasToken: !!cfg.bearer, username: cfg.username || null,
     polls: state.polls, requests: state.requests, rateLimits: state.rateLimits,
     user: state.user, tweets: state.tweets, usage: state.usage, history: state.history.slice(-300),
+    scan: {
+      watch: cfg.watch, query: cfg.query, hasJevKey: !!cfg.jevKey, concurrency: cfg.jevConcurrency,
+      total: posts.length, queued: jevQueue.length, active: jevActive, jevDone: jev.done, jevFailed: jev.failed,
+      unlabeled: posts.filter((p) => !p.label).length,
+      counts: Object.fromEntries(LABELS.map((l) => [l, posts.filter((p) => p.label === l).length])),
+    },
   };
 }
 
@@ -184,6 +351,12 @@ http.createServer((req, res) => {
 
   if (url.pathname === '/' || url.pathname === '/index.html') return serveFile(res, 'index.html');
   if (url.pathname === '/api/stats') return json(res, 200, snapshot());
+  if (url.pathname === '/api/posts') {
+    const label = url.searchParams.get('label');
+    const limit = Math.min(500, Number(url.searchParams.get('limit')) || 100);
+    const list = label ? posts.filter((p) => (label === 'unlabeled' ? !p.label : p.label === label)) : posts;
+    return json(res, 200, list.slice(0, limit));
+  }
   if (url.pathname === '/api/logs') return json(res, 200, logs);
   if (url.pathname === '/api/logs/stream') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
