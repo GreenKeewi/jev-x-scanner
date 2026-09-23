@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qualified posts</title>
+<style>
+  :root { --bg:#0e1116; --card:#161b22; --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --hot:#ff7b72; --line:#30363d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:16px; }
+  header a { color:var(--muted); text-decoration:none; font-size:13px; margin-left:16px; }
+  main { max-width:900px; margin:0 auto; padding:20px; display:grid; gap:12px; }
+  .sub { color:var(--muted); font-size:12px; }
+  .post { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--hot); border-radius:10px; padding:14px 16px; }
+  .post .top { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .post .who { font-weight:600; }
+  .post p { margin:0 0 10px; white-space:pre-wrap; word-break:break-word; }
+  .stats { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+  .stats b { color:var(--text); font-variant-numeric:tabular-nums; }
+  a.open { display:inline-block; margin-top:10px; color:var(--accent); text-decoration:none; word-break:break-all; }
+  .empty { text-align:center; color:var(--muted); padding:40px 0; }
+  @media (max-width:600px) { main { padding:12px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>&#128293; Qualified posts <span class="sub" id="count"></span></h1>
+  <div><a href="/">Dashboard</a><a href="/logout">Sign out</a></div>
+</header>
+<main id="list"><div class="empty">Loading...</div></main>
+<script>
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+const fmt = (n) => (n == null ? '-' : Number(n).toLocaleString());
+const age = (m) => (m == null ? '-' : m < 60 ? m + 'm' : (m / 60).toFixed(1) + 'h');
+async function load() {
+  try {
+    const r = await fetch('/api/posts?label=reply_now&limit=500');
+    if (r.status === 401) return (location.href = '/login');
+    const posts = (await r.json()).sort((a, b) => (b.labeledAt || b.foundAt || 0) - (a.labeledAt || a.foundAt || 0));
+    document.getElementById('count').textContent = `(${posts.length})`;
+    document.getElementById('list').innerHTML = posts.map((p) => `
+      <article class="post">
+        <div class="top"><span class="who">@${esc(p.author)}</span><span class="sub">qualified ${p.labeledAt ? new Date(p.labeledAt).toLocaleString() : '-'}</span></div>
+        <p>${esc(p.text)}</p>
+        <div class="stats"><span><b>${fmt(p.velocity)}</b>/h growth</span><span><b>${age(p.ageMinutes)}</b> old when found</span><span><b>${fmt(p.metrics.likes)}</b> likes</span><span><b>${fmt(p.metrics.reposts)}</b> reposts</span><span><b>${fmt(p.metrics.replies)}</b> replies</span><span><b>${fmt(p.metrics.views)}</b> views</span></div>
+        <a class="open" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a>
+      </article>`).join('') || '<div class="empty">No qualified posts yet. They appear here when Jev rates a fast-growing post "Reply now".</div>';
+  } catch (e) { /* next tick retries */ }
+}
+load(); setInterval(load, 10000);
+</script>
+</body>
+</html>

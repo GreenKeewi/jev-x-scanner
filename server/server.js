@@ -178,6 +178,7 @@ async function labelPost(p) {
   try {
     try { p.label = await callJev(p); } catch { p.label = await callJev(p); } // one retry
     p.error = undefined;
+    p.labeledAt = Date.now();
     jev.done++;
     log('info', `labeled @${p.author} ${p.id}: ${p.label}`);
     if (p.label === 'reply_now') await notifySlack(p);
@@ -213,7 +214,7 @@ function ingest(t, author) {
   const p = {
     id: t.id, url: `https://x.com/${author}/status/${t.id}`, author, text: t.text, createdAt: t.created_at,
     metrics: { views: m.impression_count || 0, likes: m.like_count || 0, replies: m.reply_count || 0, reposts: m.retweet_count || 0 },
-    label: null,
+    label: null, foundAt: Date.now(),
   };
   // growth: weighted engagements per hour (floor the age at 15 min so brand-new posts aren't inflated)
   const ageHours = Math.max((Date.now() - new Date(t.created_at).getTime()) / 3600000, 0.25);
@@ -398,6 +399,7 @@ http.createServer((req, res) => {
   if (req.method !== 'GET') return send(res, 405, 'Read-only');
 
   if (url.pathname === '/' || url.pathname === '/index.html') return serveFile(res, 'index.html');
+  if (url.pathname === '/qualified') return serveFile(res, 'qualified.html');
   if (url.pathname === '/api/stats') return json(res, 200, snapshot());
   if (url.pathname === '/api/posts') {
     const label = url.searchParams.get('label');
