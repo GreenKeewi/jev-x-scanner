@@ -36,8 +36,11 @@ const cfg = {
   brand: (process.env.DREAMWORK_DESCRIPTION || '').trim() ||
     'Dreamwork (dreamworkhq.com, "Stop applying, start interviewing") is a job-search platform for tech professionals: upload a resume once and it ranks live roles by fit, ' +
     'tailors the resume and cover letter per role, and fills out applications on company sites, with an autopilot option. ' +
-    'Good posts to reply to are about job hunting, applying, ATS/resume pain, rejections or ghosting, interviews, tech hiring and layoffs news, internships and new-grad searches, or careers at top tech companies. ' +
-    'Be genuinely helpful first, in a confident and conversational tone. Never plug Dreamwork on someone\'s job loss or hardship, and never on unrelated topics.',
+    'The @dreamworkhq account is small (about 1,000 followers) and known for: news-hook posts (AI hiring lawsuits such as Workday, job boards like Indeed selling visibility to employers, recruiter and deepfake-interview scams, whether hiring is actually opening back up), ' +
+    'an anti-job-board, anti-opaque-AI-screening stance ("you\'re not the customer, you\'re the traffic"), a punchy conversational voice, and replies that add a sharp point or a pointed question rather than a pitch. ' +
+    'Good posts to reply to: job hunting and applying, ATS/resume pain, AI screening or automated rejections, ghosting, interviews, recruiter scams, tech hiring and layoffs news, hiring-market data, internships and new-grad searches, job-board complaints, careers at top tech companies. ' +
+    'Bad posts: anything unrelated to jobs or hiring (crypto, prediction markets, general AI hype), and posts where a plug would feel opportunistic. ' +
+    'Be genuinely useful first. Never plug Dreamwork on someone\'s job loss or hardship, and never on unrelated topics.',
   slackUrl: (process.env.SLACK_WEBHOOK_URL || '').trim(),
   minVelocity: Number(process.env.MIN_VELOCITY_PER_HOUR) || 30, // weighted engagements/hour below which a post is auto-skipped (no Jev call)
   maxAgeHours: Number(process.env.MAX_POST_AGE_HOURS) || 6,     // older posts are auto-skipped
