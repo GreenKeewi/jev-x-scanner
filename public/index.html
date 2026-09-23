@@ -35,7 +35,7 @@
   .filters button { background:var(--bg); color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:4px 12px; font:inherit; font-size:12px; cursor:pointer; }
   .filters button.on { color:var(--text); border-color:var(--accent); }
   .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; white-space:nowrap; }
-  .b-breaking { background:#3d1418; color:#ff7b72; } .b-golden_nugget { background:#3d2f00; color:#f2cc60; } .b-ai_slop { background:#21262d; color:var(--muted); } .b-none { background:#21262d; color:var(--warn); }
+  .b-reply_now { background:#3d1418; color:#ff7b72; font-weight:600; } .b-maybe { background:#3d2f00; color:#f2cc60; } .b-skip { background:#21262d; color:var(--muted); } .b-none { background:#21262d; color:var(--warn); }
   td a { color:var(--accent); text-decoration:none; }
   .banner { background:#3d2f00; border:1px solid var(--warn); color:#f2cc60; border-radius:8px; padding:10px 14px; display:none; }
 </style>
@@ -78,14 +78,14 @@
     <h2>Scanner <span class="sub" id="scanInfo"></span></h2>
     <div class="grid" style="margin-bottom:12px">
       <div class="card"><h2>Scanned</h2><div class="big" id="sTotal">-</div><div class="sub" id="sQueue"></div></div>
-      <div class="card"><h2>&#9889; Breaking</h2><div class="big" id="cBreaking">-</div></div>
-      <div class="card"><h2>&#129689; Golden Nugget</h2><div class="big" id="cGolden">-</div></div>
-      <div class="card"><h2>&#129302; Slop</h2><div class="big" id="cSlop">-</div></div>
+      <div class="card"><h2>&#128293; Reply now</h2><div class="big" id="cReply">-</div></div>
+      <div class="card"><h2>Maybe</h2><div class="big" id="cMaybe">-</div></div>
+      <div class="card"><h2>Skip</h2><div class="big" id="cSkip">-</div></div>
     </div>
     <div class="filters" id="filters">
-      <button data-f="" class="on">All</button><button data-f="breaking">Breaking</button><button data-f="golden_nugget">Golden Nugget</button><button data-f="ai_slop">Slop</button><button data-f="unlabeled">Unlabeled</button>
+      <button data-f="reply_now" class="on">&#128293; Reply now</button><button data-f="maybe">Maybe</button><button data-f="skip">Skip</button><button data-f="unlabeled">Unlabeled</button><button data-f="">All</button>
     </div>
-    <table><thead><tr><th>Post</th><th>Label</th><th class="num">Likes</th><th class="num">Views</th></tr></thead><tbody id="scanPosts"></tbody></table>
+    <table><thead><tr><th>Post</th><th>Verdict</th><th class="num">Growth /h</th><th class="num">Age</th><th class="num">Likes</th><th class="num">Views</th></tr></thead><tbody id="scanPosts"></tbody></table>
   </section>
 
   <section class="card"><h2>Recent posts (tracked account)</h2>
@@ -125,7 +125,7 @@ async function refresh() {
     $('scanInfo').textContent = sc.watch.length ? `${sc.watch.length} account(s)` + (sc.query ? ` matching "${sc.query}"` : '') : '(no X_WATCH_ACCOUNTS set)';
     $('sTotal').textContent = fmt(sc.total);
     $('sQueue').textContent = `${sc.queued + sc.active} labeling, ${sc.unlabeled} unlabeled, ${sc.jevFailed} failed`;
-    $('cBreaking').textContent = fmt(sc.counts.breaking); $('cGolden').textContent = fmt(sc.counts.golden_nugget); $('cSlop').textContent = fmt(sc.counts.ai_slop);
+    $('cReply').textContent = fmt(sc.counts.reply_now); $('cMaybe').textContent = fmt(sc.counts.maybe); $('cSkip').textContent = fmt(sc.counts.skip);
     loadPosts();
 
     const pm = s.user && s.user.public_metrics;
@@ -148,16 +148,17 @@ async function refresh() {
   } catch (e) { /* next tick retries */ }
 }
 
-let filter = '';
-const LABEL_TEXT = { breaking: '⚡ Breaking', golden_nugget: '🪙 Golden Nugget', ai_slop: '🤖 Slop' };
+let filter = 'reply_now';
+const LABEL_TEXT = { reply_now: '🔥 Reply now', maybe: 'Maybe', skip: 'Skip' };
+const age = (m) => (m == null ? '-' : m < 60 ? m + 'm' : (m / 60).toFixed(1) + 'h');
 async function loadPosts() {
   try {
     const r = await fetch('/api/posts?limit=100' + (filter ? '&label=' + filter : ''));
     if (!r.ok) return;
     $('scanPosts').innerHTML = (await r.json()).map((p) => {
       const badge = p.label ? `<span class="badge b-${p.label}">${LABEL_TEXT[p.label]}</span>` : `<span class="badge b-none">${p.error ? 'failed' : 'pending'}</span>`;
-      return `<tr><td><a href="${esc(p.url)}" target="_blank" rel="noopener">@${esc(p.author)}</a> ${esc(p.text.slice(0, 200))}<div class="sub">${new Date(p.createdAt).toLocaleString()}${p.error ? ' - ' + esc(p.error) : ''}</div></td><td>${badge}</td><td class="num">${fmt(p.metrics.likes)}</td><td class="num">${fmt(p.metrics.views)}</td></tr>`;
-    }).join('') || '<tr><td colspan="4" class="sub">No scanned posts yet</td></tr>';
+      return `<tr><td><a href="${esc(p.url)}" target="_blank" rel="noopener">@${esc(p.author)}</a> ${esc(p.text.slice(0, 200))}<div class="sub">${new Date(p.createdAt).toLocaleString()}${p.error ? ' - ' + esc(p.error) : ''}${p.auto ? ' - auto-skipped: ' + esc(p.auto) : ''}${p.slacked ? ' - sent to Slack' : ''}</div></td><td>${badge}</td><td class="num">${fmt(p.velocity)}</td><td class="num">${age(p.ageMinutes)}</td><td class="num">${fmt(p.metrics.likes)}</td><td class="num">${fmt(p.metrics.views)}</td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="sub">Nothing here yet</td></tr>';
   } catch (e) { /* next tick retries */ }
 }
 $('filters').addEventListener('click', (e) => {

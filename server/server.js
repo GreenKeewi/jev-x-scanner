@@ -32,6 +32,15 @@ const cfg = {
   jevKey: process.env.JEV_API_KEY || '',
   jevConcurrency: Math.min(16, Math.max(1, Number(process.env.JEV_CONCURRENCY) || 4)),
   jevPreference: (process.env.JEV_PREFERENCE || '').trim(),
+  // reply-opportunity tuning
+  brand: (process.env.DREAMWORK_DESCRIPTION || '').trim() ||
+    'Dreamwork (dreamworkhq.com, "Stop applying, start interviewing") is a job-search platform for tech professionals: upload a resume once and it ranks live roles by fit, ' +
+    'tailors the resume and cover letter per role, and fills out applications on company sites, with an autopilot option. ' +
+    'Good posts to reply to are about job hunting, applying, ATS/resume pain, rejections or ghosting, interviews, tech hiring and layoffs news, internships and new-grad searches, or careers at top tech companies. ' +
+    'Be genuinely helpful first, in a confident and conversational tone. Never plug Dreamwork on someone\'s job loss or hardship, and never on unrelated topics.',
+  slackUrl: (process.env.SLACK_WEBHOOK_URL || '').trim(),
+  minVelocity: Number(process.env.MIN_VELOCITY_PER_HOUR) || 30, // weighted engagements/hour below which a post is auto-skipped (no Jev call)
+  maxAgeHours: Number(process.env.MAX_POST_AGE_HOURS) || 6,     // older posts are auto-skipped
 };
 if (!cfg.password) { console.error('DASHBOARD_PASSWORD is not set in .env'); process.exit(1); }
 
@@ -92,11 +101,21 @@ async function xGet(endpoint, pathAndQuery) {
 // ---------- scanned posts + Jev labelling ----------
 const POSTS_FILE = path.join(ROOT, 'data', 'posts.json');
 const POSTS_MAX = 2000;
-const LABELS = ['breaking', 'golden_nugget', 'ai_slop'];
+const LABELS = ['reply_now', 'maybe', 'skip'];
+const INSTRUCTIONS =
+  'You decide which X posts the brand account @dreamworkhq should reply to, so its replies get seen and lead people to Dreamwork.' +
+  (cfg.brand ? ` About Dreamwork: ${cfg.brand}` : '') +
+  ' You are given the post, its author, its engagement, its age in minutes, and its engagement velocity (engagements per hour).' +
+  ' Be strict: most posts are not worth a reply. Only label reply_now when a reply from Dreamwork would clearly pay off.';
 const CRITERIA = {
-  breaking: 'Breaking news, urgent or time-sensitive, important developing information.',
-  golden_nugget: 'Valuable, insightful, high-quality content worth reading closely.',
-  ai_slop: 'Low-quality, generic, or likely AI-generated filler content.',
+  reply_now:
+    'A great, fast-growing post: engagement is high for its age (strong velocity, still early enough that a reply will be seen near the top), ' +
+    'its topic or audience overlaps with what Dreamwork is for, and Dreamwork can add real value or a sharp, natural take that leads into Dreamwork without sounding like an ad. ' +
+    'Not rage-bait, not a tragedy or sensitive topic, not a giveaway/engagement-farm post.',
+  maybe:
+    'Decent post with some growth or relevance, but the fit with Dreamwork is loose, the momentum is modest, or a reply would be a stretch.',
+  skip:
+    'Not worth replying to: slow or no growth, too old, off-topic for Dreamwork, spammy or low-quality, sensitive/controversial, or a reply would look like a forced plug.',
 };
 let posts = []; // newest first: {id,url,author,text,createdAt,metrics,label,error}
 try { posts = JSON.parse(fs.readFileSync(POSTS_FILE, 'utf8')); } catch { /* first run */ }
@@ -118,14 +137,17 @@ const jev = { done: 0, failed: 0 };
 
 async function callJev(p) {
   const criteria = { ...CRITERIA };
-  if (cfg.jevPreference) criteria.golden_nugget += ` The user is specifically interested in: "${cfg.jevPreference}".`;
+  if (cfg.jevPreference) criteria.reply_now += ` Extra guidance from the Dreamwork team: ${cfg.jevPreference}`;
   const res = await fetch('https://api.typesafe.ai/v1/systemone', {
     method: 'POST',
     headers: { Authorization: `Bearer ${cfg.jevKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'jev-latest',
-      state: { post: p.text, engagement: { views: p.metrics.views, likes: p.metrics.likes, replies: p.metrics.replies, reposts: p.metrics.reposts } },
-      questions: { label: { type: 'choice', instructions: 'Classify this X/Twitter post as Breaking, Golden Nugget, or AI Slop.', criteria } },
+      state: {
+        post: p.text, author: `@${p.author}`, ageMinutes: p.ageMinutes, engagementPerHour: p.velocity,
+        engagement: { views: p.metrics.views, likes: p.metrics.likes, replies: p.metrics.replies, reposts: p.metrics.reposts },
+      },
+      questions: { label: { type: 'choice', instructions: INSTRUCTIONS, criteria } },
     }),
     signal: AbortSignal.timeout(20000),
   });
@@ -134,12 +156,28 @@ async function callJev(p) {
   if (!LABELS.includes(choice)) throw new Error('unexpected Jev response');
   return choice;
 }
+const slackEsc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+async function notifySlack(p) {
+  if (!cfg.slackUrl || p.slacked) return;
+  const text = slackEsc(p.text.length > 280 ? p.text.slice(0, 277) + '...' : p.text).replace(/\n+/g, ' ');
+  const msg = `:fire: *Reply now* - @${p.author} (${p.velocity}/h growth, ${p.ageMinutes}m old, ${p.metrics.likes} likes)\n> ${text}\n${p.url}`;
+  try {
+    const res = await fetch(cfg.slackUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: msg }), signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`Slack responded ${res.status}`);
+    p.slacked = true;
+    log('info', `sent to Slack: ${p.url}`);
+  } catch (e) {
+    log('error', `Slack send failed for ${p.id}: ${e.message}`);
+  }
+  postsDirty = true;
+}
 async function labelPost(p) {
   try {
     try { p.label = await callJev(p); } catch { p.label = await callJev(p); } // one retry
     p.error = undefined;
     jev.done++;
     log('info', `labeled @${p.author} ${p.id}: ${p.label}`);
+    if (p.label === 'reply_now') await notifySlack(p);
   } catch (e) {
     p.error = e.message;
     jev.failed++;
@@ -163,6 +201,7 @@ function queueLabel(p) {
   pumpJev();
 }
 for (const p of [...posts].reverse()) if (!p.label) queueLabel(p); // resume unlabeled posts after a restart
+if (cfg.slackUrl) for (const p of [...posts].reverse()) if (p.label === 'reply_now' && !p.slacked) notifySlack(p); // resend any that failed earlier
 
 function ingest(t, author) {
   if (seen.has(t.id)) return false;
@@ -173,10 +212,16 @@ function ingest(t, author) {
     metrics: { views: m.impression_count || 0, likes: m.like_count || 0, replies: m.reply_count || 0, reposts: m.retweet_count || 0 },
     label: null,
   };
+  // growth: weighted engagements per hour (floor the age at 15 min so brand-new posts aren't inflated)
+  const ageHours = Math.max((Date.now() - new Date(t.created_at).getTime()) / 3600000, 0.25);
+  p.ageMinutes = Math.round(ageHours * 60);
+  p.velocity = Math.round((p.metrics.likes + 2 * p.metrics.reposts + 3 * p.metrics.replies) / ageHours);
   posts.unshift(p);
   if (posts.length > POSTS_MAX) posts.length = POSTS_MAX;
   postsDirty = true;
-  queueLabel(p);
+  if (ageHours > cfg.maxAgeHours) { p.label = 'skip'; p.auto = `older than ${cfg.maxAgeHours}h`; }
+  else if (p.velocity < cfg.minVelocity) { p.label = 'skip'; p.auto = `growth ${p.velocity}/h is under ${cfg.minVelocity}/h`; }
+  else queueLabel(p);
   return true;
 }
 const newer = (a, b) => (!b || BigInt(a) > BigInt(b) ? a : b);
