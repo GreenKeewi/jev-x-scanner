@@ -125,7 +125,7 @@ async function refresh() {
     const sc = s.scan;
     $('scanInfo').textContent = sc.watch.length ? `${sc.watch.length} account(s)` + (sc.query ? ` matching "${sc.query}"` : '') : '(no X_WATCH_ACCOUNTS set)';
     $('sTotal').textContent = fmt(sc.total);
-    $('sQueue').textContent = `${sc.queued + sc.active} labeling, ${sc.unlabeled} unlabeled, ${sc.jevFailed} failed`;
+    $('sQueue').textContent = `${sc.tracking} tracking, ${sc.queued + sc.active} with Jev, ${sc.jevFailed} failed`;
     $('cReply').textContent = fmt(sc.counts.reply_now); $('cMaybe').textContent = fmt(sc.counts.maybe); $('cSkip').textContent = fmt(sc.counts.skip);
     loadPosts();
 

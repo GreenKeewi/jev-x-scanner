@@ -42,6 +42,10 @@ const cfg = {
     'Bad posts: anything unrelated to jobs or hiring (crypto, prediction markets, general AI hype), and posts where a plug would feel opportunistic. ' +
     'Be genuinely useful first. Never plug Dreamwork on someone\'s job loss or hardship, and never on unrelated topics.',
   slackUrl: (process.env.SLACK_WEBHOOK_URL || '').trim(),
+  // discovery asks X only for posts that already have at least this many likes (0 = no floor)
+  discoveryMinLikes: Number.isFinite(Number(process.env.DISCOVERY_MIN_LIKES)) && process.env.DISCOVERY_MIN_LIKES !== undefined && process.env.DISCOVERY_MIN_LIKES !== '' ? Number(process.env.DISCOVERY_MIN_LIKES) : 5,
+  // minutes after first sighting at which a tracked post is re-read to measure its real growth
+  recheckMinutes: (process.env.RECHECK_MINUTES || '20,60,120').split(',').map((s) => Number(s.trim())).filter((n) => n > 0).sort((a, b) => a - b),
   minVelocity: Number(process.env.MIN_VELOCITY_PER_HOUR) || 30, // weighted engagements/hour below which a post is auto-skipped (no Jev call)
   maxAgeHours: Number(process.env.MAX_POST_AGE_HOURS) || 6,     // older posts are auto-skipped
 };
@@ -108,7 +112,8 @@ const LABELS = ['reply_now', 'maybe', 'skip'];
 const INSTRUCTIONS =
   'You decide which X posts the brand account @dreamworkhq should reply to, so its replies get seen and lead people to Dreamwork.' +
   (cfg.brand ? ` About Dreamwork: ${cfg.brand}` : '') +
-  ' You are given the post, its author, its engagement, its age in minutes, and its engagement velocity (engagements per hour).' +
+  ' You are given the post, its author, its engagement, its age in minutes, its engagement velocity (engagements per hour, measured between our last two looks), and a growth log of timestamped engagement snapshots.' +
+  ' Accelerating growth in the log is a strong positive signal; flat or slowing growth is a negative one.' +
   ' Be strict: most posts are not worth a reply. Only label reply_now when a reply from Dreamwork would clearly pay off.';
 const CRITERIA = {
   reply_now:
@@ -147,8 +152,9 @@ async function callJev(p) {
     body: JSON.stringify({
       model: 'jev-latest',
       state: {
-        post: p.text, author: `@${p.author}`, ageMinutes: p.ageMinutes, engagementPerHour: p.velocity,
+        post: p.text, author: `@${p.author}`, ageMinutes: p.ageMinutes, engagementPerHour: p.velocity, engagementPerHourSincePosted: p.avgVelocity,
         engagement: { views: p.metrics.views, likes: p.metrics.likes, replies: p.metrics.replies, reposts: p.metrics.reposts },
+        growthLog: (p.snapshots || []).slice(-5).map((s) => ({ minutesSinceFirstSeen: Math.round((s.t - p.foundAt) / 60000), likes: s.likes, reposts: s.reposts, replies: s.replies })),
       },
       questions: { label: { type: 'choice', instructions: INSTRUCTIONS, criteria } },
     }),
@@ -179,6 +185,7 @@ async function labelPost(p) {
     try { p.label = await callJev(p); } catch { p.label = await callJev(p); } // one retry
     p.error = undefined;
     p.labeledAt = Date.now();
+    if (p.label !== 'reply_now') p.status = 'done'; // stop re-reading posts we won't act on
     jev.done++;
     log('info', `labeled @${p.author} ${p.id}: ${p.label}`);
     if (p.label === 'reply_now') await notifySlack(p);
@@ -204,47 +211,118 @@ function queueLabel(p) {
   jevQueue.push(p);
   pumpJev();
 }
-for (const p of [...posts].reverse()) if (!p.label) queueLabel(p); // resume unlabeled posts after a restart
+for (const p of [...posts].reverse()) { if (!p.label && p.queued) queueLabel(p); } // resume posts that were sent to Jev before a restart (tracking posts resume via rechecks)
 if (cfg.slackUrl) for (const p of [...posts].reverse()) if (p.label === 'reply_now' && !p.slacked) notifySlack(p); // resend any that failed earlier
 
+// ---- growth tracking: every post keeps timestamped snapshots of its engagement, and is re-read on a schedule ----
+const postsById = new Map(posts.map((p) => [p.id, p]));
+const weighted = (s) => s.likes + 2 * s.reposts + 3 * s.replies;
+const perHour = (a, b) => Math.max(0, Math.round((weighted(b) - weighted(a)) / Math.max((b.t - a.t) / 3600000, 1 / 60)));
+const ageHoursOf = (p) => (Date.now() - new Date(p.createdAt).getTime()) / 3600000;
+
+function nextCheck(p) {
+  const mins = cfg.recheckMinutes[p.checks];
+  p.nextCheckAt = mins == null ? null : p.foundAt + mins * 60000;
+}
+function addSnapshot(p, m) {
+  const s = { t: Date.now(), likes: m.like_count || 0, reposts: m.retweet_count || 0, replies: m.reply_count || 0, views: m.impression_count || 0 };
+  p.snapshots.push(s);
+  if (p.snapshots.length > 12) p.snapshots.splice(1, 1); // keep the first, drop the oldest middle one
+  p.metrics = { views: s.views, likes: s.likes, replies: s.replies, reposts: s.reposts };
+  p.ageMinutes = Math.round(ageHoursOf(p) * 60);
+  p.avgVelocity = Math.round(weighted(s) / Math.max(ageHoursOf(p), 0.25)); // since posted
+  const n = p.snapshots.length;
+  p.recentVelocity = n >= 2 ? perHour(p.snapshots[n - 2], s) : null;       // between our last two looks
+  p.velocity = p.recentVelocity ?? p.avgVelocity;
+  postsDirty = true;
+}
+// Decide what to do after a new snapshot: skip, ask Jev, or keep watching.
+function decide(p) {
+  if (p.label === 'skip' || p.label === 'maybe') { p.status = 'done'; return; }
+  if (p.label || p.queued) { // already sent to Jev / qualified: keep logging growth until the schedule ends
+    nextCheck(p);
+    if (p.nextCheckAt == null || ageHoursOf(p) > cfg.maxAgeHours) p.status = 'done';
+    return;
+  }
+  const skip = (why) => { p.label = 'skip'; p.auto = why; p.status = 'done'; p.labeledAt = Date.now(); log('info', `auto-skip @${p.author} ${p.id}: ${why}`); };
+  if (ageHoursOf(p) > cfg.maxAgeHours) return skip(`older than ${cfg.maxAgeHours}h`);
+  if (p.recentVelocity != null) { // measured growth between two looks
+    if (p.recentVelocity >= cfg.minVelocity) { p.queued = true; queueLabel(p); }
+    else if (p.checks >= cfg.recheckMinutes.length) return skip(`growth stalled at ${p.recentVelocity}/h (needs ${cfg.minVelocity}/h)`);
+  } else {                         // first look: only the average since posting is known
+    if (p.avgVelocity < cfg.minVelocity / 2) return skip(`growth ${p.avgVelocity}/h is under ${Math.round(cfg.minVelocity / 2)}/h`);
+    if (p.avgVelocity >= cfg.minVelocity * 2) { p.queued = true; queueLabel(p); } // already clearly hot: don't wait
+  }
+  p.status = 'tracking';
+  nextCheck(p);
+  if (p.nextCheckAt == null) { if (p.queued) p.status = 'done'; else skip('did not show enough growth'); }
+}
+
+let rechecking = false;
+async function recheckDue() {
+  if (rechecking || !cfg.bearer) return;
+  const now = Date.now();
+  const due = posts.filter((p) => p.status === 'tracking' && p.nextCheckAt && p.nextCheckAt <= now);
+  if (!due.length) return;
+  rechecking = true;
+  try {
+    for (let i = 0; i < due.length; i += 100) { // one batched read per 100 posts
+      const batch = due.slice(i, i + 100);
+      try {
+        const b = await xGet('tweets', `/2/tweets?ids=${batch.map((p) => p.id).join(',')}&tweet.fields=public_metrics,created_at`);
+        const got = new Map((b.data || []).map((t) => [t.id, t]));
+        for (const p of batch) {
+          const t = got.get(p.id);
+          if (!t) { p.status = 'done'; if (!p.label) { p.label = 'skip'; p.auto = 'post no longer available'; } continue; }
+          p.checks++;
+          addSnapshot(p, t.public_metrics || {});
+          log('info', `recheck @${p.author} ${p.id}: ${p.velocity}/h, ${p.metrics.likes} likes (check ${p.checks}/${cfg.recheckMinutes.length})`);
+          decide(p);
+        }
+      } catch (e) { for (const p of batch) p.nextCheckAt = Date.now() + 5 * 60000; } // xGet already logged it; retry in 5 min
+    }
+  } finally { rechecking = false; postsDirty = true; }
+}
+setInterval(() => recheckDue().catch((e) => log('error', `recheck crashed: ${e.message}`)), 60000).unref();
+
 function ingest(t, author) {
-  if (seen.has(t.id)) return false;
-  seen.add(t.id);
   const m = t.public_metrics || {};
+  const existing = postsById.get(t.id);
+  if (existing) { // seen again by discovery: a free extra snapshot
+    const last = existing.snapshots && existing.snapshots[existing.snapshots.length - 1];
+    if (existing.status === 'tracking' && last && Date.now() - last.t > 5 * 60000) { addSnapshot(existing, m); decide(existing); }
+    return false;
+  }
+  if (Date.now() - new Date(t.created_at).getTime() > cfg.maxAgeHours * 3600000) return false; // too old to be worth storing
   const p = {
     id: t.id, url: `https://x.com/${author}/status/${t.id}`, author, text: t.text, createdAt: t.created_at,
-    metrics: { views: m.impression_count || 0, likes: m.like_count || 0, replies: m.reply_count || 0, reposts: m.retweet_count || 0 },
-    label: null, foundAt: Date.now(),
+    metrics: { views: 0, likes: 0, replies: 0, reposts: 0 }, snapshots: [], label: null, foundAt: Date.now(), checks: 0, status: 'tracking',
   };
-  // growth: weighted engagements per hour (floor the age at 15 min so brand-new posts aren't inflated)
-  const ageHours = Math.max((Date.now() - new Date(t.created_at).getTime()) / 3600000, 0.25);
-  p.ageMinutes = Math.round(ageHours * 60);
-  p.velocity = Math.round((p.metrics.likes + 2 * p.metrics.reposts + 3 * p.metrics.replies) / ageHours);
+  addSnapshot(p, m);
   posts.unshift(p);
-  if (posts.length > POSTS_MAX) posts.length = POSTS_MAX;
-  postsDirty = true;
-  if (ageHours > cfg.maxAgeHours) { p.label = 'skip'; p.auto = `older than ${cfg.maxAgeHours}h`; }
-  else if (p.velocity < cfg.minVelocity) { p.label = 'skip'; p.auto = `growth ${p.velocity}/h is under ${cfg.minVelocity}/h`; }
-  else queueLabel(p);
+  postsById.set(p.id, p);
+  for (const d of posts.splice(POSTS_MAX)) postsById.delete(d.id);
+  decide(p);
   return true;
 }
 const newer = (a, b) => (!b || BigInt(a) > BigInt(b) ? a : b);
 
+// Discovery: ask X for the most relevant (engaged) recent posts from the watched accounts, only within the age window.
+const feat = { minLikes: cfg.discoveryMinLikes > 0, relevancy: true };
 async function scanViaSearch() {
   const groups = [];
   for (let i = 0; i < cfg.watch.length; i += 12) groups.push(cfg.watch.slice(i, i + 12)); // keep query under length limit
+  const windowHours = Math.min(cfg.maxAgeHours, 167);
   let added = 0;
   for (const g of groups) {
-    const key = g.join(',');
-    const q = `(${g.map((a) => 'from:' + a).join(' OR ')}) -is:retweet${cfg.includeReplies ? '' : ' -is:reply'}${cfg.query ? ' ' + cfg.query : ''}`;
-    const since = sinceIds.get(key) ? `&since_id=${sinceIds.get(key)}` : '';
+    const q = `(${g.map((a) => 'from:' + a).join(' OR ')}) -is:retweet${cfg.includeReplies ? '' : ' -is:reply'}` +
+      `${feat.minLikes ? ` min_likes:${cfg.discoveryMinLikes}` : ''}${cfg.query ? ' ' + cfg.query : ''}`;
+    const start = new Date(Date.now() - windowHours * 3600000 + 60000).toISOString();
     const b = await xGet('tweets/search/recent',
-      `/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=${cfg.maxPerPoll}&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username${since}`);
+      `/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=${cfg.maxPerPoll}&start_time=${start}` +
+      `${feat.relevancy ? '&sort_order=relevancy' : ''}&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username`);
     const names = new Map((b.includes?.users || []).map((u) => [u.id, u.username]));
-    for (const t of b.data || []) {
-      if (ingest(t, names.get(t.author_id) || 'i')) added++;
-      sinceIds.set(key, newer(t.id, sinceIds.get(key)));
-    }
+    for (const t of b.data || []) if (ingest(t, names.get(t.author_id) || 'i')) added++;
   }
   return added;
 }
@@ -263,9 +341,9 @@ async function scanViaTimelines() {
     const since = sinceIds.get(id) ? `&since_id=${sinceIds.get(id)}` : '';
     const b = await xGet('users/:id/tweets', `/2/users/${id}/tweets?max_results=${cfg.maxPerPoll}&exclude=${excl}&tweet.fields=created_at,public_metrics${since}`);
     for (const t of b.data || []) {
+      sinceIds.set(id, newer(t.id, sinceIds.get(id)));
       if (cfg.query && !cfg.query.toLowerCase().split(/\s+/).some((w) => w && t.text.toLowerCase().includes(w.replace(/^["(]+|[")]+$/g, '')))) continue;
       if (ingest(t, name)) added++;
-      sinceIds.set(id, newer(t.id, sinceIds.get(id)));
     }
   }
   return added;
@@ -273,10 +351,12 @@ async function scanViaTimelines() {
 let useTimelines = false;
 async function scanAccounts() {
   if (!cfg.watch.length) return;
-  let added;
-  if (!useTimelines) {
-    try { added = await scanViaSearch(); }
+  let added = 0;
+  for (let attempt = 0; attempt < 3 && !useTimelines; attempt++) {
+    try { added = await scanViaSearch(); break; }
     catch (e) {
+      if (e.status === 400 && feat.minLikes) { feat.minLikes = false; log('warn', 'search rejected the min_likes operator; retrying without it'); continue; }
+      if (e.status === 400 && feat.relevancy) { feat.relevancy = false; log('warn', 'search rejected sort_order=relevancy; retrying without it'); continue; }
       if (e.status !== 403 && e.status !== 400) throw e;
       useTimelines = true;
       log('warn', 'search endpoint unavailable on this API tier; falling back to per-account timelines (keyword query is applied as a simple text filter)');
@@ -365,7 +445,7 @@ function snapshot() {
     scan: {
       watch: cfg.watch, query: cfg.query, hasJevKey: !!cfg.jevKey, concurrency: cfg.jevConcurrency,
       total: posts.length, queued: jevQueue.length, active: jevActive, jevDone: jev.done, jevFailed: jev.failed,
-      unlabeled: posts.filter((p) => !p.label).length,
+      unlabeled: posts.filter((p) => !p.label).length, tracking: posts.filter((p) => p.status === 'tracking').length,
       counts: Object.fromEntries(LABELS.map((l) => [l, posts.filter((p) => p.label === l).length])),
     },
   };

@@ -19,6 +19,8 @@
   .post p { margin:0 0 10px; white-space:pre-wrap; word-break:break-word; }
   .stats { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
   .stats b { color:var(--text); font-variant-numeric:tabular-nums; }
+  .log { margin-top:8px; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .log b { color:var(--text); }
   a.open { display:inline-block; margin-top:10px; color:var(--accent); text-decoration:none; word-break:break-all; }
   .empty { text-align:center; color:var(--muted); padding:40px 0; }
   @media (max-width:600px) { main { padding:12px; } }
@@ -45,6 +47,7 @@ async function load() {
         <div class="top"><span class="who">@${esc(p.author)}</span><span class="sub">qualified ${p.labeledAt ? new Date(p.labeledAt).toLocaleString() : '-'}</span></div>
         <p>${esc(p.text)}</p>
         <div class="stats"><span><b>${fmt(p.velocity)}</b>/h growth</span><span><b>${age(p.ageMinutes)}</b> old when found</span><span><b>${fmt(p.metrics.likes)}</b> likes</span><span><b>${fmt(p.metrics.reposts)}</b> reposts</span><span><b>${fmt(p.metrics.replies)}</b> replies</span><span><b>${fmt(p.metrics.views)}</b> views</span></div>
+        ${(p.snapshots && p.snapshots.length) ? `<div class="log"><span class="sub">growth log:</span> ${p.snapshots.map((s) => `${new Date(s.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} <b>${fmt(s.likes)}</b>&#9829; <b>${fmt(s.reposts)}</b>&#8635; <b>${fmt(s.replies)}</b>&#128172;`).join(' &rarr; ')}</div>` : ''}
         <a class="open" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a>
       </article>`).join('') || '<div class="empty">No qualified posts yet. They appear here when Jev rates a fast-growing post "Reply now".</div>';
   } catch (e) { /* next tick retries */ }
