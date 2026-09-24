@@ -41,6 +41,9 @@ const cfg = {
     'Good posts to reply to: job hunting and applying, ATS/resume pain, AI screening or automated rejections, ghosting, interviews, recruiter scams, tech hiring and layoffs news, hiring-market data, internships and new-grad searches, job-board complaints, careers at top tech companies. ' +
     'Bad posts: anything unrelated to jobs or hiring (crypto, prediction markets, general AI hype), and posts where a plug would feel opportunistic. ' +
     'Be genuinely useful first. Never plug Dreamwork on someone\'s job loss or hardship, and never on unrelated topics.',
+  // opt-in: ask Jev about each new post on its text alone (before the engagement filter); skips it there if Jev says skip. JEV_PREFILTER_MAX caps how many.
+  jevPrefilter: /^(1|true|yes)$/i.test(process.env.JEV_PREFILTER || ''),
+  prefilterMax: Number(process.env.JEV_PREFILTER_MAX) || Infinity,
   slackUrl: (process.env.SLACK_WEBHOOK_URL || '').trim(),
   // discovery asks X only for posts that already have at least this many likes (0 = no floor)
   discoveryMinLikes: Number.isFinite(Number(process.env.DISCOVERY_MIN_LIKES)) && process.env.DISCOVERY_MIN_LIKES !== undefined && process.env.DISCOVERY_MIN_LIKES !== '' ? Number(process.env.DISCOVERY_MIN_LIKES) : 5,
@@ -143,7 +146,7 @@ let jevActive = 0;
 let jevKeyWarned = false;
 const jev = { done: 0, failed: 0 };
 
-async function callJev(p) {
+async function callJev(p, pre = false) {
   const criteria = { ...CRITERIA };
   if (cfg.jevPreference) criteria.reply_now += ` Extra guidance from the Dreamwork team: ${cfg.jevPreference}`;
   const res = await fetch('https://api.typesafe.ai/v1/systemone', {
@@ -151,7 +154,7 @@ async function callJev(p) {
     headers: { Authorization: `Bearer ${cfg.jevKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'jev-latest',
-      state: {
+      state: pre ? { post: p.text, author: `@${p.author}`, ageMinutes: p.ageMinutes, note: 'Text only: engagement has not been measured yet.' } : {
         post: p.text, author: `@${p.author}`, ageMinutes: p.ageMinutes, engagementPerHour: p.velocity, engagementPerHourSincePosted: p.avgVelocity,
         engagement: { views: p.metrics.views, likes: p.metrics.likes, replies: p.metrics.replies, reposts: p.metrics.reposts },
         growthLog: (p.snapshots || []).slice(-5).map((s) => ({ minutesSinceFirstSeen: Math.round((s.t - p.foundAt) / 60000), likes: s.likes, reposts: s.reposts, replies: s.replies })),
@@ -180,6 +183,15 @@ async function notifySlack(p) {
   }
   postsDirty = true;
 }
+let prefilterCount = 0;
+async function prefilterPost(p) { // Jev pass 1: content only, before the engagement filter
+  try {
+    try { p.preLabel = await callJev(p, true); } catch { p.preLabel = await callJev(p, true); }
+    log('info', `jev pass 1 (before engagement filter) @${p.author} ${p.id}: ${p.preLabel}`);
+  } catch (e) { log('error', `Jev pass 1 failed for ${p.id}: ${e.message}`); }
+  if (p.preLabel === 'skip') { p.label = 'skip'; p.auto = 'Jev pre-filter'; p.status = 'done'; p.labeledAt = Date.now(); postsDirty = true; return; }
+  decide(p); // engagement filter, then Jev pass 2 for survivors
+}
 async function labelPost(p) {
   try {
     try { p.label = await callJev(p); } catch { p.label = await callJev(p); } // one retry
@@ -187,7 +199,7 @@ async function labelPost(p) {
     p.labeledAt = Date.now();
     if (p.label !== 'reply_now') p.status = 'done'; // stop re-reading posts we won't act on
     jev.done++;
-    log('info', `labeled @${p.author} ${p.id}: ${p.label}`);
+    log('info', `jev pass 2 (after engagement filter) @${p.author} ${p.id}: ${p.label}${p.preLabel ? ` (pass 1 said ${p.preLabel})` : ''}`);
     if (p.label === 'reply_now') await notifySlack(p);
   } catch (e) {
     p.error = e.message;
@@ -302,7 +314,8 @@ function ingest(t, author) {
   posts.unshift(p);
   postsById.set(p.id, p);
   for (const d of posts.splice(POSTS_MAX)) postsById.delete(d.id);
-  decide(p);
+  if (cfg.jevPrefilter && cfg.jevKey && prefilterCount < cfg.prefilterMax) { prefilterCount++; p.status = 'prefilter'; prefilterPost(p); }
+  else decide(p);
   return true;
 }
 const newer = (a, b) => (!b || BigInt(a) > BigInt(b) ? a : b);
