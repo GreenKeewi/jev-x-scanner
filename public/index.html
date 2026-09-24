@@ -144,7 +144,7 @@ async function refresh() {
       `<tr><td>${esc(e)}</td><td class="num">${v.remaining} / ${v.limit}</td><td class="num">${new Date(v.reset).toLocaleTimeString()}</td></tr>`).join('') || '<tr><td colspan="3" class="sub">No data yet</td></tr>';
     $('byEp').innerHTML = Object.entries(s.requests.byEndpoint).map(([e, n]) =>
       `<tr><td>${esc(e)}</td><td class="num">${fmt(n)}</td></tr>`).join('') || '<tr><td colspan="2" class="sub">No data yet</td></tr>';
-    $('tweets').innerHTML = s.tweets.map((t) => { const m = t.public_metrics || {}; return `<tr><td>${esc(t.text.slice(0, 140))}<div class="sub">${new Date(t.created_at).toLocaleString()}</div></td><td class="num">${fmt(m.like_count)}</td><td class="num">${fmt(m.retweet_count)}</td><td class="num">${fmt(m.reply_count)}</td><td class="num">${fmt(m.impression_count)}</td></tr>`; }).join('') || '<tr><td colspan="5" class="sub">No posts yet</td></tr>';
+    $('tweets').innerHTML = s.tweets.map((t) => { const m = t.public_metrics || {}; return `<tr><td>${esc(t.text.slice(0, 140))}<div class="sub">${new Date(t.created_at).toLocaleString()}</div>${s.user ? `<div class="sub"><a href="https://x.com/${esc(s.user.username)}/status/${esc(t.id)}" target="_blank" rel="noopener">https://x.com/${esc(s.user.username)}/status/${esc(t.id)}</a></div>` : ''}</td><td class="num">${fmt(m.like_count)}</td><td class="num">${fmt(m.retweet_count)}</td><td class="num">${fmt(m.reply_count)}</td><td class="num">${fmt(m.impression_count)}</td></tr>`; }).join('') || '<tr><td colspan="5" class="sub">No posts yet</td></tr>';
     drawChart(s.history);
   } catch (e) { /* next tick retries */ }
 }
@@ -158,7 +158,7 @@ async function loadPosts() {
     if (!r.ok) return;
     $('scanPosts').innerHTML = (await r.json()).map((p) => {
       const badge = p.label ? `<span class="badge b-${p.label}">${LABEL_TEXT[p.label]}</span>` : `<span class="badge b-none">${p.error ? 'failed' : 'pending'}</span>`;
-      return `<tr><td><a href="${esc(p.url)}" target="_blank" rel="noopener">@${esc(p.author)}</a> ${esc(p.text.slice(0, 200))}<div class="sub">${new Date(p.createdAt).toLocaleString()}${p.error ? ' - ' + esc(p.error) : ''}${p.auto ? ' - auto-skipped: ' + esc(p.auto) : ''}${p.slacked ? ' - sent to Slack' : ''}</div></td><td>${badge}</td><td class="num">${fmt(p.velocity)}</td><td class="num">${age(p.ageMinutes)}</td><td class="num">${fmt(p.metrics.likes)}</td><td class="num">${fmt(p.metrics.views)}</td></tr>`;
+      return `<tr><td><a href="${esc(p.url)}" target="_blank" rel="noopener">@${esc(p.author)}</a> ${esc(p.text.slice(0, 200))}<div class="sub">${new Date(p.createdAt).toLocaleString()}${p.error ? ' - ' + esc(p.error) : ''}${p.auto ? ' - auto-skipped: ' + esc(p.auto) : ''}${p.slacked ? ' - sent to Slack' : ''}</div><div class="sub"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a></div></td><td>${badge}</td><td class="num">${fmt(p.velocity)}</td><td class="num">${age(p.ageMinutes)}</td><td class="num">${fmt(p.metrics.likes)}</td><td class="num">${fmt(p.metrics.views)}</td></tr>`;
     }).join('') || '<tr><td colspan="6" class="sub">Nothing here yet</td></tr>';
   } catch (e) { /* next tick retries */ }
 }
