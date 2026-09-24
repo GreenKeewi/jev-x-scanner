@@ -119,11 +119,11 @@ async function refresh() {
     $('nextPoll').textContent = s.polls.next ? 'next poll ' + new Date(s.polls.next).toLocaleTimeString() : `every ${s.pollIntervalSeconds}s`;
     const b = $('banner');
     if (!s.hasToken) { b.style.display = 'block'; b.textContent = 'X_BEARER_TOKEN is not set in .env. Add it and restart the server.'; }
-    else if (!s.username && !s.scan.watch.length) { b.style.display = 'block'; b.textContent = 'Set X_USERNAME (own-account stats) and/or X_WATCH_ACCOUNTS (accounts to scan) in .env, then restart the server.'; }
-    else if (s.scan.watch.length && !s.scan.hasJevKey) { b.style.display = 'block'; b.textContent = 'JEV_API_KEY is not set in .env, so scanned posts are collected but not labeled.'; }
+    else if (!s.username && !s.scan.watch.length && !s.scan.query) { b.style.display = 'block'; b.textContent = 'Set X_USERNAME (own-account stats), X_WATCH_ACCOUNTS (accounts to scan) and/or X_SEARCH_QUERY (terms to search) in .env, then restart the server.'; }
+    else if ((s.scan.watch.length || s.scan.query) && !s.scan.hasJevKey) { b.style.display = 'block'; b.textContent = 'JEV_API_KEY is not set in .env, so scanned posts are collected but not labeled.'; }
     else b.style.display = 'none';
     const sc = s.scan;
-    $('scanInfo').textContent = sc.watch.length ? `${sc.watch.length} account(s)` + (sc.query ? ` matching "${sc.query}"` : '') : '(no X_WATCH_ACCOUNTS set)';
+    $('scanInfo').textContent = sc.watch.length || sc.query ? [sc.watch.length ? `${sc.watch.length} account(s)` : 'all of X', sc.query ? `matching "${sc.query}"` : ''].join(' ').trim() : '(set X_WATCH_ACCOUNTS or X_SEARCH_QUERY)';
     $('sTotal').textContent = fmt(sc.total);
     $('sQueue').textContent = `${sc.tracking} tracking, ${sc.queued + sc.active} with Jev, ${sc.jevFailed} failed`;
     $('cReply').textContent = fmt(sc.counts.reply_now); $('cMaybe').textContent = fmt(sc.counts.maybe); $('cSkip').textContent = fmt(sc.counts.skip);

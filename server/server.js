@@ -24,7 +24,7 @@ const cfg = {
   username: (process.env.X_USERNAME || '').replace(/^@/, ''),
   pollSeconds: Math.max(60, Number(process.env.POLL_INTERVAL_SECONDS) || 300),
   secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
-  // scanning: watch these accounts (optionally filtered by a keyword query) and label each post with Jev
+  // scanning: watch these accounts and/or search a keyword query (X_SEARCH_QUERY uses X search syntax, e.g. "job search" OR ghosted) and label each post with Jev
   watch: (process.env.X_WATCH_ACCOUNTS || '').split(',').map((s) => s.trim().replace(/^@/, '')).filter(Boolean),
   query: (process.env.X_SEARCH_QUERY || '').trim(),
   includeReplies: /^(1|true|yes)$/i.test(process.env.X_INCLUDE_REPLIES || ''),
@@ -312,11 +312,14 @@ const feat = { minLikes: cfg.discoveryMinLikes > 0, relevancy: true };
 async function scanViaSearch() {
   const groups = [];
   for (let i = 0; i < cfg.watch.length; i += 12) groups.push(cfg.watch.slice(i, i + 12)); // keep query under length limit
+  if (!groups.length) groups.push([]); // no accounts: pure keyword search across all of X
   const windowHours = Math.min(cfg.maxAgeHours, 167);
   let added = 0;
   for (const g of groups) {
-    const q = `(${g.map((a) => 'from:' + a).join(' OR ')}) -is:retweet${cfg.includeReplies ? '' : ' -is:reply'}` +
-      `${feat.minLikes ? ` min_likes:${cfg.discoveryMinLikes}` : ''}${cfg.query ? ' ' + cfg.query : ''}`;
+    const who = g.length ? `(${g.map((a) => 'from:' + a).join(' OR ')})` : '';
+    const terms = cfg.query ? (g.length ? cfg.query : `(${cfg.query})`) : '';
+    const q = `${who}${who && terms ? ' ' : ''}${terms} -is:retweet${cfg.includeReplies ? '' : ' -is:reply'}` +
+      `${feat.minLikes ? ` min_likes:${cfg.discoveryMinLikes}` : ''}`;
     const start = new Date(Date.now() - windowHours * 3600000 + 60000).toISOString();
     const b = await xGet('tweets/search/recent',
       `/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=${cfg.maxPerPoll}&start_time=${start}` +
@@ -350,7 +353,7 @@ async function scanViaTimelines() {
 }
 let useTimelines = false;
 async function scanAccounts() {
-  if (!cfg.watch.length) return;
+  if (!cfg.watch.length && !cfg.query) return; // nothing to scan for
   let added = 0;
   for (let attempt = 0; attempt < 3 && !useTimelines; attempt++) {
     try { added = await scanViaSearch(); break; }
@@ -358,12 +361,13 @@ async function scanAccounts() {
       if (e.status === 400 && feat.minLikes) { feat.minLikes = false; log('warn', 'search rejected the min_likes operator; retrying without it'); continue; }
       if (e.status === 400 && feat.relevancy) { feat.relevancy = false; log('warn', 'search rejected sort_order=relevancy; retrying without it'); continue; }
       if (e.status !== 403 && e.status !== 400) throw e;
+      if (!cfg.watch.length) throw e; // the timeline fallback needs accounts
       useTimelines = true;
       log('warn', 'search endpoint unavailable on this API tier; falling back to per-account timelines (keyword query is applied as a simple text filter)');
     }
   }
   if (useTimelines) added = await scanViaTimelines();
-  log('info', `scan finished: ${added} new post(s) from ${cfg.watch.length} account(s)`);
+  log('info', `scan finished: ${added} new post(s) from ${cfg.watch.length ? cfg.watch.length + ' account(s)' : 'keyword search'}`);
 }
 
 async function poll() {
