@@ -61,7 +61,26 @@ function log(level, msg, meta) {
   if (logs.length > LOG_MAX) logs.shift();
   console.log(`[${entry.t}] ${level.toUpperCase()} ${msg}`);
   for (const res of sseClients) res.write(`data: ${JSON.stringify(entry)}\n\n`);
+  if (level === 'error') alertSlack(msg);
 }
+
+// Error alerts: every error-level log is also posted to Slack. Identical errors (ids/numbers ignored)
+// are sent at most once per cooldown so a failing API can't flood the channel.
+const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+const alertSent = new Map(); // normalized message -> last sent time
+function alertSlack(msg) {
+  if (!cfg.slackUrl || msg.startsWith('Slack ')) return; // never alert about Slack failing (would loop)
+  const key = msg.replace(/\d+/g, '#');
+  const now = Date.now();
+  if (now - (alertSent.get(key) || 0) < ALERT_COOLDOWN_MS) return;
+  alertSent.set(key, now);
+  const text = `:rotating_light: *Jev X Scanner hit an error, please look into it*\n\`\`\`${msg.slice(0, 500).replace(/`/g, "'")}\`\`\``;
+  fetch(cfg.slackUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(10000) })
+    .then((res) => { if (!res.ok) throw new Error(`responded ${res.status}`); })
+    .catch((e) => { alertSent.delete(key); console.error(`Slack error alert failed: ${e.message}`); });
+}
+process.on('uncaughtException', (e) => log('error', `uncaught exception: ${e.message}`));
+process.on('unhandledRejection', (e) => log('error', `unhandled rejection: ${(e && e.message) || e}`));
 
 // ---------- state ----------
 const STATE_FILE = path.join(ROOT, 'data', 'state.json');
