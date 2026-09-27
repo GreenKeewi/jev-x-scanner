@@ -86,7 +86,7 @@
     <div class="filters" id="filters">
       <button data-f="reply_now" class="on">&#128293; Reply now</button><button data-f="maybe">Maybe</button><button data-f="skip">Skip</button><button data-f="unlabeled">Unlabeled</button><button data-f="">All</button>
     </div>
-    <table><thead><tr><th>Post</th><th>Verdict</th><th class="num">Growth /h</th><th class="num">Age</th><th class="num">Likes</th><th class="num">Views</th></tr></thead><tbody id="scanPosts"></tbody></table>
+    <table><thead><tr><th>Post</th><th>Verdict</th><th class="num">Score /10</th><th class="num">Engagement /hour</th><th class="num">Age</th><th class="num">Likes</th><th class="num">Views</th></tr></thead><tbody id="scanPosts"></tbody></table>
   </section>
 
   <section class="card"><h2>Recent posts (tracked account)</h2>
@@ -158,8 +158,8 @@ async function loadPosts() {
     if (!r.ok) return;
     $('scanPosts').innerHTML = (await r.json()).map((p) => {
       const badge = p.label ? `<span class="badge b-${p.label}">${LABEL_TEXT[p.label]}</span>` : `<span class="badge b-none">${p.error ? 'failed' : 'pending'}</span>`;
-      return `<tr><td><a href="${esc(p.url)}" target="_blank" rel="noopener">@${esc(p.author)}</a> ${esc(p.text.slice(0, 200))}<div class="sub">${new Date(p.createdAt).toLocaleString()}${p.error ? ' - ' + esc(p.error) : ''}${p.auto ? ' - auto-skipped: ' + esc(p.auto) : ''}${p.slacked ? ' - sent to Slack' : ''}</div></td><td>${badge}</td><td class="num">${fmt(p.velocity)}</td><td class="num">${age(p.ageMinutes)}</td><td class="num">${fmt(p.metrics.likes)}</td><td class="num">${fmt(p.metrics.views)}</td></tr>`;
-    }).join('') || '<tr><td colspan="6" class="sub">Nothing here yet</td></tr>';
+      return `<tr><td><a href="${esc(p.url)}" target="_blank" rel="noopener">@${esc(p.author)}</a> ${esc(p.text.slice(0, 200))}<div class="sub">${new Date(p.createdAt).toLocaleString()}${p.error ? ' - ' + esc(p.error) : ''}${p.auto ? ' - auto-skipped: ' + esc(p.auto) : ''}${p.contentSafety && p.contentSafety !== 'clear' ? ' - blocked by content safety' : ''}${p.approvalRank ? ' - Slack rank #' + p.approvalRank : ''}${p.slacked ? ' - sent to Slack' : ''}</div></td><td>${badge}</td><td class="num">${p.engagementScore == null ? '-' : Number(p.engagementScore).toFixed(1)}</td><td class="num">${p.engagementPerHour == null ? '-' : fmt(p.engagementPerHour)}</td><td class="num">${age(p.ageMinutes)}</td><td class="num">${fmt(p.metrics.likes)}</td><td class="num">${fmt(p.metrics.views)}</td></tr>`;
+    }).join('') || '<tr><td colspan="7" class="sub">Nothing here yet</td></tr>';
   } catch (e) { /* next tick retries */ }
 }
 $('filters').addEventListener('click', (e) => {

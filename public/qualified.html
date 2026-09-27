@@ -15,12 +15,9 @@
   .sub { color:var(--muted); font-size:12px; }
   .post { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--hot); border-radius:10px; padding:14px 16px; }
   .post .top { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
-  .post .who { font-weight:600; }
   .post p { margin:0 0 10px; white-space:pre-wrap; word-break:break-word; }
   .stats { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
   .stats b { color:var(--text); font-variant-numeric:tabular-nums; }
-  .log { margin-top:8px; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
-  .log b { color:var(--text); }
   a.open { display:inline-block; margin-top:10px; color:var(--accent); text-decoration:none; word-break:break-all; }
   .empty { text-align:center; color:var(--muted); padding:40px 0; }
   @media (max-width:600px) { main { padding:12px; } }
@@ -35,21 +32,21 @@
 <script>
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const fmt = (n) => (n == null ? '-' : Number(n).toLocaleString());
-const age = (m) => (m == null ? '-' : m < 60 ? m + 'm' : (m / 60).toFixed(1) + 'h');
+const firstWords = (text) => { const words = String(text || '').trim().split(/\s+/).filter(Boolean); return words.slice(0, 15).join(' ') + (words.length > 15 ? '…' : ''); };
+const launch = (date) => new Date(date).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
 async function load() {
   try {
     const r = await fetch('/api/posts?label=reply_now&limit=500');
     if (r.status === 401) return (location.href = '/login');
-    const posts = (await r.json()).sort((a, b) => (b.labeledAt || b.foundAt || 0) - (a.labeledAt || a.foundAt || 0));
+    const posts = (await r.json()).filter((p) => p.contentSafety === 'clear').sort((a, b) => (b.engagementScore || 0) - (a.engagementScore || 0) || (b.velocity || 0) - (a.velocity || 0));
     document.getElementById('count').textContent = `(${posts.length})`;
     document.getElementById('list').innerHTML = posts.map((p) => `
       <article class="post">
-        <div class="top"><span class="who">@${esc(p.author)}</span><span class="sub">qualified ${p.labeledAt ? new Date(p.labeledAt).toLocaleString() : '-'}</span></div>
-        <p>${esc(p.text)}</p>
-        <div class="stats"><span><b>${fmt(p.velocity)}</b>/h growth</span><span><b>${age(p.ageMinutes)}</b> old when found</span><span><b>${fmt(p.metrics.likes)}</b> likes</span><span><b>${fmt(p.metrics.reposts)}</b> reposts</span><span><b>${fmt(p.metrics.replies)}</b> replies</span><span><b>${fmt(p.metrics.views)}</b> views</span></div>
-        ${(p.snapshots && p.snapshots.length) ? `<div class="log"><span class="sub">growth log:</span> ${p.snapshots.map((s) => `${new Date(s.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} <b>${fmt(s.likes)}</b>&#9829; <b>${fmt(s.reposts)}</b>&#8635; <b>${fmt(s.replies)}</b>&#128172;`).join(' &rarr; ')}</div>` : ''}
+        <div class="top"><span class="sub">Score ${p.engagementScore == null ? '-' : Number(p.engagementScore).toFixed(1)}/10</span><span class="sub">Engagement ${p.engagementPerHour == null ? '-' : fmt(p.engagementPerHour) + '/hour'}${p.engagementPerHour > 50 ? ' 🔥' : ''}</span></div>
+        <p>${esc(firstWords(p.text))}</p>
+        <div class="sub">Launched ${esc(launch(p.createdAt))}</div>
         <a class="open" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a>
-      </article>`).join('') || '<div class="empty">No qualified posts yet. They appear here when Jev rates a fast-growing post "Reply now".</div>';
+      </article>`).join('') || '<div class="empty">No qualified posts yet. They appear here only after Jev approves the full text as safe and the post clears the warm-engagement bar.</div>';
   } catch (e) { /* next tick retries */ }
 }
 load(); setInterval(load, 10000);
