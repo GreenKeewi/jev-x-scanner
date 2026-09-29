@@ -356,7 +356,10 @@ async function flushNotificationQueue() {
       }
       persistPosts();
       log('info', `sent ${candidates.length} posts to Slack in ${batch.label} ET batch`);
-    } else log('info', `no qualified posts for ${batch.label} ET Slack batch`);
+    } else {
+      await sendSlackMessage(`*Reply opportunities · ${batch.label} ET*\nNo posts met the reply criteria for this batch.`);
+      log('info', `sent no-opportunities status to Slack in ${batch.label} ET batch`);
+    }
     state.notificationBatches[batch.key] = { at: Date.now(), postIds: candidates.map((post) => post.id) };
     const cutoff = localDay(localParts(Date.now() - 14 * 86400000));
     for (const key of Object.keys(state.notificationBatches)) if (key.slice(0, 10) < cutoff) delete state.notificationBatches[key];
