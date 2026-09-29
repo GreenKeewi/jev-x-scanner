@@ -357,7 +357,7 @@ async function flushNotificationQueue() {
       persistPosts();
       log('info', `sent ${candidates.length} posts to Slack in ${batch.label} ET batch`);
     } else {
-      await sendSlackMessage(`*Reply opportunities · ${batch.label} ET*\nNo posts met the reply criteria for this batch.`);
+      await sendSlackMessage(`*Reply opportunities · ${batch.label} ET*\nDidn't find anything to post in this batch.`);
       log('info', `sent no-opportunities status to Slack in ${batch.label} ET batch`);
     }
     state.notificationBatches[batch.key] = { at: Date.now(), postIds: candidates.map((post) => post.id) };
