@@ -55,6 +55,8 @@ const cfg = {
     'Bad posts: anything unrelated to jobs or hiring (crypto, prediction markets, general AI hype), and posts where a plug would feel opportunistic. ' +
     'Be genuinely useful first. Never plug Dreamwork on someone\'s job loss or hardship, and never on unrelated topics.',
   slackUrl: (process.env.SLACK_WEBHOOK_URL || '').trim(),
+  slackBotToken: (process.env.SLACK_BOT_TOKEN || '').trim(),
+  slackChannelId: (process.env.SLACK_CHANNEL_ID || '').trim(),
   // X often withholds preview metadata from Slack. FixupX supplies the public
   // post metadata and redirects people back to X when they open the link.
   slackXPreviewDomain: (process.env.SLACK_X_PREVIEW_DOMAIN ?? 'fixupx.com').trim().toLowerCase(),
@@ -307,8 +309,30 @@ function slackBatchLine(post, rank) {
     `<${previewUrl}|${sourceUrl}> · Score ${Number(post.engagementScore).toFixed(1)}/10 · Engagement ${post.engagementPerHour}/hour${flame} · Launched ${launchTime.format(new Date(post.createdAt))}`;
 }
 let notificationFlushRunning = false;
+async function sendSlackMessage(text) {
+  const body = { text, unfurl_links: true, unfurl_media: true };
+  if (cfg.slackBotToken) {
+    if (!cfg.slackChannelId) throw new Error('SLACK_CHANNEL_ID is required with SLACK_BOT_TOKEN');
+    const res = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.slackBotToken },
+      body: JSON.stringify({ ...body, channel: cfg.slackChannelId }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const result = await res.json();
+    if (!res.ok || !result.ok) throw new Error('Slack API responded ' + (result.error || res.status));
+    return;
+  }
+  const res = await fetch(cfg.slackUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error('Slack responded ' + res.status);
+}
 async function flushNotificationQueue() {
-  if (notificationFlushRunning || !cfg.slackUrl) return;
+  if (notificationFlushRunning || (!cfg.slackBotToken && !cfg.slackUrl)) return;
   const batch = dueNotificationBatch(Date.now());
   if (!batch || state.notificationBatches[batch.key]) return;
   notificationFlushRunning = true;
@@ -322,8 +346,7 @@ async function flushNotificationQueue() {
       .slice(0, cfg.notificationBatchSize);
     if (candidates.length) {
       const msg = `*Reply opportunities · ${batch.label} ET*\n` + candidates.map((post, index) => slackBatchLine(post, index + 1)).join('\n\n');
-      const res = await fetch(cfg.slackUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: msg, unfurl_links: true, unfurl_media: true }), signal: AbortSignal.timeout(10000) });
-      if (!res.ok) throw new Error(`Slack responded ${res.status}`);
+      await sendSlackMessage(msg);
       const sentAt = Date.now();
       for (const [index, post] of candidates.entries()) {
         post.slacked = true;
