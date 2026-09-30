@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "description": "Read-only, password-protected dashboard for the X developer API",
-  "scripts": { "start": "node server/server.js" },
-  "engines": { "node": ">=18" }
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test tests/*.test.js",
+    "check": "node --check server/server.js && node --check server/budget.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
 }
