@@ -35,7 +35,7 @@
   .filters button { background:var(--bg); color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:4px 12px; font:inherit; font-size:12px; cursor:pointer; }
   .filters button.on { color:var(--text); border-color:var(--accent); }
   .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; white-space:nowrap; }
-  .b-reply_now { background:#3d1418; color:#ff7b72; font-weight:600; } .b-maybe { background:#3d2f00; color:#f2cc60; } .b-skip { background:#21262d; color:var(--muted); } .b-none { background:#21262d; color:var(--warn); }
+  .b-reply_now { background:#3d1418; color:#ff7b72; font-weight:600; } .b-inspiration { background:#123629; color:#7ee787; } .b-maybe { background:#3d2f00; color:#f2cc60; } .b-skip { background:#21262d; color:var(--muted); } .b-none { background:#21262d; color:var(--warn); }
   td a { color:var(--accent); text-decoration:none; }
   .banner { background:#3d2f00; border:1px solid var(--warn); color:#f2cc60; border-radius:8px; padding:10px 14px; display:none; }
 </style>
@@ -83,8 +83,9 @@
       <div class="card"><h2>Maybe</h2><div class="big" id="cMaybe">-</div></div>
       <div class="card"><h2>Skip</h2><div class="big" id="cSkip">-</div></div>
     </div>
+    <div class="sub" id="budgetInfo"></div>
     <div class="filters" id="filters">
-      <button data-f="reply_now" class="on">&#128293; Reply now</button><button data-f="maybe">Maybe</button><button data-f="skip">Skip</button><button data-f="unlabeled">Unlabeled</button><button data-f="">All</button>
+      <button data-f="reply_now" class="on">&#128293; Reply now</button><button data-f="inspiration">Inspiration</button><button data-f="maybe">Maybe</button><button data-f="skip">Skip</button><button data-f="unlabeled">Unlabeled</button><button data-f="">All</button>
     </div>
     <table><thead><tr><th>Post</th><th>Verdict</th><th class="num">Score /10</th><th class="num">Engagement /hour</th><th class="num">Age</th><th class="num">Likes</th><th class="num">Views</th></tr></thead><tbody id="scanPosts"></tbody></table>
   </section>
@@ -118,12 +119,14 @@ async function refresh() {
     $('reqs').textContent = fmt(s.requests.total);
     $('nextPoll').textContent = s.polls.next ? 'next poll ' + new Date(s.polls.next).toLocaleTimeString() : `every ${s.pollIntervalSeconds}s`;
     const b = $('banner');
-    if (!s.hasToken) { b.style.display = 'block'; b.textContent = 'X_BEARER_TOKEN is not set in .env. Add it and restart the server.'; }
+    if (s.budget?.blocked) { b.style.display = 'block'; b.textContent = 'X reads paused: ' + s.budget.reason + '. Inspect the persisted budget and deployment recovery guide; do not reset the ledger.'; }
+    else if (!s.hasToken) { b.style.display = 'block'; b.textContent = 'X_BEARER_TOKEN is not set in .env. Add it and restart the server.'; }
     else if (!s.username && !s.scan.watch.length) { b.style.display = 'block'; b.textContent = 'Set X_USERNAME (own-account stats) and/or X_WATCH_ACCOUNTS (accounts to scan) in .env, then restart the server.'; }
     else if (s.scan.watch.length && !s.scan.hasJevKey) { b.style.display = 'block'; b.textContent = 'JEV_API_KEY is not set in .env, so scanned posts are collected but not labeled.'; }
     else b.style.display = 'none';
     const sc = s.scan;
     $('scanInfo').textContent = sc.watch.length ? `${sc.watch.length} account(s)` + (sc.query ? ` matching "${sc.query}"` : '') : '(no X_WATCH_ACCOUNTS set)';
+    $('budgetInfo').textContent = s.budget ? `UTC raw-post budget: ${s.budget.used ?? 'unknown'}/100 reserved or returned; ${s.budget.remaining} available. Noon ET only; up to 3 inspiration picks. ` + (s.notifications?.configured ? '' : 'Slack bot delivery is not configured.') : '';
     $('sTotal').textContent = fmt(sc.total);
     $('sQueue').textContent = `${sc.tracking} tracking, ${sc.queued + sc.active} with Jev, ${sc.jevFailed} failed`;
     $('cReply').textContent = fmt(sc.counts.reply_now); $('cMaybe').textContent = fmt(sc.counts.maybe); $('cSkip').textContent = fmt(sc.counts.skip);
@@ -150,7 +153,7 @@ async function refresh() {
 }
 
 let filter = 'reply_now';
-const LABEL_TEXT = { reply_now: '🔥 Reply now', maybe: 'Maybe', skip: 'Skip' };
+const LABEL_TEXT = { inspiration: 'Inspiration', reply_now: '🔥 Reply now', maybe: 'Maybe', skip: 'Skip' };
 const age = (m) => (m == null ? '-' : m < 60 ? m + 'm' : (m / 60).toFixed(1) + 'h');
 async function loadPosts() {
   try {
