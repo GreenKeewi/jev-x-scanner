@@ -2,3 +2,9 @@
 node_modules/
 .claude/worktrees/
 data/
+.claude/
+output/
+scripts/
+tmp/
+__pycache__/
+.deploy-*

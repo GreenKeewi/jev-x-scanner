@@ -1,0 +1,14 @@
+services:
+  scanner:
+    build: .
+    container_name: jev-x-scanner
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "${PORT:-3200}"
+      DATA_DIR: /app/data
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${PORT:-3200}:${PORT:-3200}"
+    volumes:
+      - ./data:/app/data

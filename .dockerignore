@@ -1,0 +1,10 @@
+.env
+.git
+.claude
+node_modules
+data
+output
+scripts
+tests
+tmp
+.deploy-*
